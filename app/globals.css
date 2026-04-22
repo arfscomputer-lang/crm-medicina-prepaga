@@ -1,0 +1,33 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Space+Mono:wght@400;700&display=swap');
+
+:root {
+  --font-dm-sans: 'DM Sans', sans-serif;
+  --font-space-mono: 'Space Mono', monospace;
+}
+
+* {
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font-dm-sans);
+  background-color: #0F1117;
+  color: #E5E7EB;
+  min-height: 100vh;
+}
+
+.font-mono {
+  font-family: var(--font-space-mono);
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
