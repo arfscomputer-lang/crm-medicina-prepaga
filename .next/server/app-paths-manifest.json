@@ -2,5 +2,5 @@
   "/page": "app/page.js",
   "/whatsapp/page": "app/whatsapp/page.js",
   "/configuracion/page": "app/configuracion/page.js",
-  "/messenger/page": "app/messenger/page.js"
+  "/planes/page": "app/planes/page.js"
 }
