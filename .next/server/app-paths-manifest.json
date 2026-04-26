@@ -3,5 +3,6 @@
   "/whatsapp/page": "app/whatsapp/page.js",
   "/configuracion/page": "app/configuracion/page.js",
   "/planes/page": "app/planes/page.js",
-  "/comisiones/page": "app/comisiones/page.js"
+  "/comisiones/page": "app/comisiones/page.js",
+  "/actividades/page": "app/actividades/page.js"
 }
