@@ -25,6 +25,11 @@
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
       "static/chunks/app/messenger/page.js"
+    ],
+    "/planes/page": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/planes/page.js"
     ]
   }
 }
