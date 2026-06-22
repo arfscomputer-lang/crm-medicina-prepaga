@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import AppShell from '@/components/AppShell'
 import Topbar from '@/components/Topbar'
@@ -103,7 +103,7 @@ function toggleArr<T>(arr: T[], val: T): T[] {
   return arr.includes(val) ? arr.filter(x => x !== val) : [...arr, val]
 }
 
-export default function CampanasPage() {
+function CampanasInner() {
   const { user, permissions } = useAuth()
   const searchParams = useSearchParams()
   const [tab, setTab] = useState<'campanas' | 'tienda'>(
@@ -701,5 +701,13 @@ export default function CampanasPage() {
         </div>
       </Modal>
     </AppShell>
+  )
+}
+
+export default function CampanasPage() {
+  return (
+    <Suspense fallback={null}>
+      <CampanasInner />
+    </Suspense>
   )
 }
