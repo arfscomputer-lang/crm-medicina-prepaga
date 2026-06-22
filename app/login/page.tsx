@@ -3,9 +3,10 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth, MfaRequiredError } from '@/lib/auth-context'
+import { supabase } from '@/lib/supabase'
 import { LogIn, ShieldCheck, ArrowLeft } from 'lucide-react'
 
-type Step = 'credentials' | 'mfa'
+type Step = 'credentials' | 'mfa' | 'forgot'
 
 export default function LoginPage() {
   const [step, setStep] = useState<Step>('credentials')
@@ -15,6 +16,7 @@ export default function LoginPage() {
   const [mfaCode, setMfaCode] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [forgotSent, setForgotSent] = useState(false)
   const router = useRouter()
   const { login, loginWithGoogle, verifyMfaLogin } = useAuth()
 
@@ -53,6 +55,21 @@ export default function LoginPage() {
     } finally {
       setLoading(false)
     }
+  }
+
+  async function handleForgotPassword(e: React.FormEvent) {
+    e.preventDefault()
+    setLoading(true)
+    setError('')
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${window.location.origin}/auth/reset-password`,
+    })
+    if (error) {
+      setError(error.message)
+    } else {
+      setForgotSent(true)
+    }
+    setLoading(false)
   }
 
   async function handleGoogleLogin() {
@@ -152,6 +169,16 @@ export default function LoginPage() {
                 </button>
               </form>
 
+              <div className="mt-4 text-center">
+                <button
+                  type="button"
+                  onClick={() => { setStep('forgot'); setError(''); setForgotSent(false) }}
+                  className="text-xs text-gray-400 hover:text-accent transition-colors"
+                >
+                  ¿Olvidaste tu contraseña?
+                </button>
+              </div>
+
               <div className="mt-8 pt-8 border-t border-border">
                 <p className="text-sm font-medium text-gray-400 mb-4">Usuarios Demo:</p>
                 <div className="space-y-2">
@@ -168,6 +195,43 @@ export default function LoginPage() {
                   ))}
                 </div>
               </div>
+            </>
+          )}
+
+          {step === 'forgot' && (
+            <>
+              <div className="flex items-center gap-3 mb-6">
+                <h2 className="text-xl font-bold">Recuperar contraseña</h2>
+              </div>
+              {forgotSent ? (
+                <div className="text-center py-4">
+                  <p className="text-green-400 text-sm mb-4">✅ Te enviamos un email con el link para restablecer tu contraseña.</p>
+                  <button onClick={() => setStep('credentials')} className="text-accent text-sm underline">Volver al login</button>
+                </div>
+              ) : (
+                <form onSubmit={handleForgotPassword} className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium mb-2">Tu email</label>
+                    <input
+                      type="email"
+                      value={email}
+                      onChange={e => setEmail(e.target.value)}
+                      placeholder="tu@email.com"
+                      required
+                      className="w-full bg-background border border-border rounded-lg px-4 py-3 text-white placeholder-gray-400 focus:outline-none focus:border-accent"
+                    />
+                  </div>
+                  {error && (
+                    <div className="bg-red-500/10 border border-red-500/30 text-red-400 px-4 py-3 rounded-lg text-sm">{error}</div>
+                  )}
+                  <button type="submit" disabled={loading} className="w-full bg-accent text-white px-6 py-3 rounded-lg font-medium hover:bg-accent/90 transition-colors disabled:opacity-50">
+                    {loading ? 'Enviando...' : 'Enviar link de recuperación'}
+                  </button>
+                  <button type="button" onClick={() => { setStep('credentials'); setError('') }} className="w-full flex items-center justify-center gap-2 text-sm text-gray-400 hover:text-white transition-colors py-2">
+                    <ArrowLeft size={16} /> Volver al login
+                  </button>
+                </form>
+              )}
             </>
           )}
 

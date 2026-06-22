@@ -1,39 +1,33 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
-import { Suspense } from 'react'
 
-function ResetPasswordForm() {
+export default function ResetPasswordPage() {
   const router = useRouter()
-  const searchParams = useSearchParams()
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [loading, setLoading] = useState(false)
-  const [verifying, setVerifying] = useState(true)
+  const [ready, setReady] = useState(false)
   const [error, setError] = useState('')
   const [done, setDone] = useState(false)
 
   useEffect(() => {
-    async function verifyToken() {
-      const token_hash = searchParams.get('token_hash')
-      const type = searchParams.get('type') as any
-
-      if (token_hash && type) {
-        const { error } = await supabase.auth.verifyOtp({ token_hash, type })
-        if (error) setError('El link expiró o es inválido. Pedí uno nuevo.')
-      } else {
-        // Fallback: token en el hash de la URL (método antiguo)
-        const hash = window.location.hash
-        if (!hash.includes('access_token')) {
-          setError('Link inválido. Pedí un nuevo reset de contraseña.')
-        }
+    // Supabase client-side SDK auto-parsea el #access_token del hash y emite PASSWORD_RECOVERY
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'PASSWORD_RECOVERY') {
+        setReady(true)
       }
-      setVerifying(false)
-    }
-    verifyToken()
-  }, [searchParams])
+    })
+
+    // Si el usuario ya tiene sesión activa (token verificado antes de llegar acá)
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) setReady(true)
+    })
+
+    return () => subscription.unsubscribe()
+  }, [])
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -52,49 +46,64 @@ function ResetPasswordForm() {
   }
 
   return (
-    <div style={{ minHeight: '100vh', background: 'var(--bg-1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <div style={{ width: '100%', maxWidth: 400, padding: '0 16px' }}>
-        <h1 style={{ textAlign: 'center', fontSize: 24, fontWeight: 700, color: 'var(--accent)', marginBottom: 8 }}>
-          CRM Medicina Prepaga
-        </h1>
-        <p style={{ textAlign: 'center', color: 'var(--fg-3)', fontSize: 13, marginBottom: 32 }}>
-          Convierte Prospectos en Afiliados
-        </p>
+    <div className="min-h-screen bg-background flex items-center justify-center p-4">
+      <div className="w-full max-w-md">
+        <div className="text-center mb-8">
+          <h1 className="text-3xl font-bold text-accent mb-2">CRM Medicina Prepaga</h1>
+          <p className="text-sm text-gray-400">Convierte Prospectos en Afiliados</p>
+        </div>
 
-        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--border-soft)', borderRadius: 16, padding: 32 }}>
-          <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 24 }}>Nueva contraseña</h2>
+        <div className="bg-card border border-border rounded-xl p-8">
+          <h2 className="text-xl font-bold mb-6">Nueva contraseña</h2>
 
-          {verifying ? (
-            <div style={{ textAlign: 'center', padding: '20px 0', color: 'var(--fg-3)' }}>
-              <div className="animate-spin" style={{ width: 32, height: 32, border: '3px solid var(--accent)', borderTopColor: 'transparent', borderRadius: '50%', margin: '0 auto 12px' }} />
-              Verificando...
-            </div>
-          ) : done ? (
-            <div style={{ textAlign: 'center', color: 'var(--success)', padding: '20px 0' }}>
+          {done ? (
+            <div className="text-center py-6" style={{ color: 'var(--success, #22c55e)' }}>
               ✅ Contraseña actualizada. Redirigiendo...
             </div>
-          ) : error && !password ? (
-            <div style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, padding: '10px 14px', color: '#ef4444', fontSize: 13 }}>
-              {error}
-              <br /><br />
-              <a href="/login" style={{ color: 'var(--accent)' }}>Volver al login</a>
+          ) : !ready ? (
+            <div className="text-center py-6 text-gray-400">
+              <div className="animate-spin w-8 h-8 border-2 border-accent border-t-transparent rounded-full mx-auto mb-3" />
+              <p className="text-sm">Verificando enlace...</p>
+              <p className="text-xs mt-2 text-gray-500">Si tarda más de 10 segundos, el link expiró.<br />
+                <a href="/login" className="text-accent underline">Volver al login</a>
+              </p>
             </div>
           ) : (
-            <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <form onSubmit={handleSubmit} className="space-y-4">
               <div>
-                <label style={{ display: 'block', fontSize: 13, fontWeight: 500, marginBottom: 6 }}>Nueva contraseña</label>
-                <input type="password" className="input" value={password} onChange={e => setPassword(e.target.value)} placeholder="Mínimo 6 caracteres" required style={{ width: '100%' }} />
+                <label className="block text-sm font-medium mb-2">Nueva contraseña</label>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={e => setPassword(e.target.value)}
+                  placeholder="Mínimo 6 caracteres"
+                  required
+                  className="w-full bg-background border border-border rounded-lg px-4 py-3 text-white placeholder-gray-400 focus:outline-none focus:border-accent"
+                />
               </div>
               <div>
-                <label style={{ display: 'block', fontSize: 13, fontWeight: 500, marginBottom: 6 }}>Confirmar contraseña</label>
-                <input type="password" className="input" value={confirm} onChange={e => setConfirm(e.target.value)} placeholder="Repetí la contraseña" required style={{ width: '100%' }} />
+                <label className="block text-sm font-medium mb-2">Confirmar contraseña</label>
+                <input
+                  type="password"
+                  value={confirm}
+                  onChange={e => setConfirm(e.target.value)}
+                  placeholder="Repetí la contraseña"
+                  required
+                  className="w-full bg-background border border-border rounded-lg px-4 py-3 text-white placeholder-gray-400 focus:outline-none focus:border-accent"
+                />
               </div>
+
               {error && (
-                <div style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, padding: '10px 14px', color: '#ef4444', fontSize: 13 }}>
+                <div className="bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-3 text-red-400 text-sm">
                   {error}
                 </div>
               )}
-              <button type="submit" className="btn btn-primary" disabled={loading} style={{ width: '100%', marginTop: 4 }}>
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full bg-accent text-white px-6 py-3 rounded-lg font-medium hover:bg-accent/90 transition-colors disabled:opacity-50"
+              >
                 {loading ? 'Guardando...' : 'Guardar nueva contraseña'}
               </button>
             </form>
@@ -102,13 +111,5 @@ function ResetPasswordForm() {
         </div>
       </div>
     </div>
-  )
-}
-
-export default function ResetPasswordPage() {
-  return (
-    <Suspense fallback={<div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Cargando...</div>}>
-      <ResetPasswordForm />
-    </Suspense>
   )
 }
