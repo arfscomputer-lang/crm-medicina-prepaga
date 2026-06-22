@@ -1,11 +1,12 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { useRouter } from 'next/navigation'
+import { useState, useEffect, Suspense } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 
-export default function ResetPasswordPage() {
+function ResetForm() {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [loading, setLoading] = useState(false)
@@ -14,20 +15,38 @@ export default function ResetPasswordPage() {
   const [done, setDone] = useState(false)
 
   useEffect(() => {
-    // Supabase client-side SDK auto-parsea el #access_token del hash y emite PASSWORD_RECOVERY
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
-      if (event === 'PASSWORD_RECOVERY') {
-        setReady(true)
+    async function verify() {
+      const token_hash = searchParams.get('token_hash')
+      const type = searchParams.get('type') ?? 'recovery'
+
+      if (token_hash) {
+        // PKCE flow — exchange token_hash for session
+        const { error } = await supabase.auth.verifyOtp({
+          token_hash,
+          type: type as any,
+        })
+        if (error) {
+          setError('El link expiró o ya fue usado. Pedí uno nuevo desde el login.')
+        } else {
+          setReady(true)
+        }
+        return
       }
-    })
 
-    // Si el usuario ya tiene sesión activa (token verificado antes de llegar acá)
-    supabase.auth.getSession().then(({ data: { session } }) => {
+      // Implicit flow — token arrives in URL hash, SDK lo maneja solo
+      const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+        if (event === 'PASSWORD_RECOVERY') setReady(true)
+      })
+
+      // Si ya hay sesión activa
+      const { data: { session } } = await supabase.auth.getSession()
       if (session) setReady(true)
-    })
 
-    return () => subscription.unsubscribe()
-  }, [])
+      return () => subscription.unsubscribe()
+    }
+
+    verify()
+  }, [searchParams])
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -57,16 +76,20 @@ export default function ResetPasswordPage() {
           <h2 className="text-xl font-bold mb-6">Nueva contraseña</h2>
 
           {done ? (
-            <div className="text-center py-6" style={{ color: 'var(--success, #22c55e)' }}>
+            <div className="text-center py-6 text-green-400">
               ✅ Contraseña actualizada. Redirigiendo...
+            </div>
+          ) : error && !ready ? (
+            <div className="space-y-4">
+              <div className="bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-3 text-red-400 text-sm">
+                {error}
+              </div>
+              <a href="/login" className="block text-center text-accent text-sm underline">Volver al login</a>
             </div>
           ) : !ready ? (
             <div className="text-center py-6 text-gray-400">
               <div className="animate-spin w-8 h-8 border-2 border-accent border-t-transparent rounded-full mx-auto mb-3" />
               <p className="text-sm">Verificando enlace...</p>
-              <p className="text-xs mt-2 text-gray-500">Si tarda más de 10 segundos, el link expiró.<br />
-                <a href="/login" className="text-accent underline">Volver al login</a>
-              </p>
             </div>
           ) : (
             <form onSubmit={handleSubmit} className="space-y-4">
@@ -78,6 +101,7 @@ export default function ResetPasswordPage() {
                   onChange={e => setPassword(e.target.value)}
                   placeholder="Mínimo 6 caracteres"
                   required
+                  autoFocus
                   className="w-full bg-background border border-border rounded-lg px-4 py-3 text-white placeholder-gray-400 focus:outline-none focus:border-accent"
                 />
               </div>
@@ -92,13 +116,11 @@ export default function ResetPasswordPage() {
                   className="w-full bg-background border border-border rounded-lg px-4 py-3 text-white placeholder-gray-400 focus:outline-none focus:border-accent"
                 />
               </div>
-
               {error && (
                 <div className="bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-3 text-red-400 text-sm">
                   {error}
                 </div>
               )}
-
               <button
                 type="submit"
                 disabled={loading}
@@ -111,5 +133,13 @@ export default function ResetPasswordPage() {
         </div>
       </div>
     </div>
+  )
+}
+
+export default function ResetPasswordPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-background flex items-center justify-center text-gray-400">Cargando...</div>}>
+      <ResetForm />
+    </Suspense>
   )
 }
