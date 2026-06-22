@@ -1,12 +1,13 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import AppShell from '@/components/AppShell'
+import Topbar from '@/components/Topbar'
+import Icon from '@/components/ui/Icon'
+import { Toggle } from '@/components/ui/Components'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth-context'
-import ProtectedRoute from '@/components/ProtectedRoute'
-import Sidebar from '@/components/Sidebar'
-import { Settings, Save, Eye, EyeOff } from 'lucide-react'
+import { PermissionGuard } from '@/components/PermissionGuard'
 
 interface WhatsAppConfig {
   id?: string
@@ -18,46 +19,22 @@ interface WhatsAppConfig {
 }
 
 export default function ConfiguracionPage() {
-  return (
-    <ProtectedRoute>
-      <ConfiguracionContent />
-    </ProtectedRoute>
-  )
-}
-
-function ConfiguracionContent() {
-  const router = useRouter()
   const { user } = useAuth()
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [showToken, setShowToken] = useState(false)
+  const [toast, setToast] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [config, setConfig] = useState<WhatsAppConfig>({
-    access_token: '',
-    phone_number_id: '',
-    business_account_id: '',
-    webhook_verify_token: '',
-    is_active: true
+    access_token: '', phone_number_id: '', business_account_id: '',
+    webhook_verify_token: '', is_active: true,
   })
-  const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null)
 
-  useEffect(() => {
-    loadConfig()
-  }, [])
+  useEffect(() => { loadConfig() }, [])
 
   async function loadConfig() {
     try {
-      const { data, error } = await supabase
-        .from('whatsapp_config')
-        .select('*')
-        .maybeSingle()
-
-      if (error) throw error
-
-      if (data) {
-        setConfig(data)
-      }
-    } catch (error) {
-      console.error('Error loading config:', error)
+      const { data } = await supabase.from('whatsapp_config').select('*').maybeSingle()
+      if (data) setConfig(data)
     } finally {
       setLoading(false)
     }
@@ -65,207 +42,141 @@ function ConfiguracionContent() {
 
   async function handleSave() {
     setSaving(true)
-    setMessage(null)
-
+    setToast(null)
     try {
-      const { data: userData } = await supabase
-        .from('users')
-        .select('org_id')
-        .eq('id', user?.id)
-        .single()
-
-      if (!userData?.org_id) {
-        throw new Error('Organization not found')
-      }
+      const { data: ud } = await supabase.from('users').select('org_id').eq('id', user?.id).single()
+      if (!ud?.org_id) throw new Error('Organización no encontrada')
 
       if (config.id) {
-        const { error } = await supabase
-          .from('whatsapp_config')
-          .update({
-            access_token: config.access_token,
-            phone_number_id: config.phone_number_id,
-            business_account_id: config.business_account_id,
-            webhook_verify_token: config.webhook_verify_token,
-            is_active: config.is_active
-          })
-          .eq('id', config.id)
-
-        if (error) throw error
+        await supabase.from('whatsapp_config').update({
+          access_token: config.access_token, phone_number_id: config.phone_number_id,
+          business_account_id: config.business_account_id, webhook_verify_token: config.webhook_verify_token,
+          is_active: config.is_active,
+        }).eq('id', config.id)
       } else {
-        const { error } = await supabase
-          .from('whatsapp_config')
-          .insert({
-            org_id: userData.org_id,
-            access_token: config.access_token,
-            phone_number_id: config.phone_number_id,
-            business_account_id: config.business_account_id,
-            webhook_verify_token: config.webhook_verify_token,
-            is_active: config.is_active
-          })
-
-        if (error) throw error
+        await supabase.from('whatsapp_config').insert({
+          org_id: ud.org_id,
+          access_token: config.access_token, phone_number_id: config.phone_number_id,
+          business_account_id: config.business_account_id, webhook_verify_token: config.webhook_verify_token,
+          is_active: config.is_active,
+        })
       }
-
-      setMessage({ type: 'success', text: 'Configuración guardada exitosamente' })
+      setToast({ type: 'success', text: 'Configuración guardada correctamente' })
       await loadConfig()
-    } catch (error: any) {
-      console.error('Error saving config:', error)
-      setMessage({ type: 'error', text: error.message || 'Error al guardar la configuración' })
+    } catch (err: any) {
+      setToast({ type: 'error', text: err.message || 'Error al guardar' })
     } finally {
       setSaving(false)
     }
   }
 
-  if (loading) {
-    return (
-      <div className="flex h-screen bg-background">
-        <Sidebar />
-        <main className="flex-1 p-8">
-          <div className="flex items-center justify-center h-full">
-            <p className="text-gray-400">Cargando configuración...</p>
-          </div>
-        </main>
-      </div>
-    )
-  }
+  const f = (k: keyof WhatsAppConfig) => (e: React.ChangeEvent<HTMLInputElement>) =>
+    setConfig(p => ({ ...p, [k]: e.target.value }))
 
   return (
-    <div className="flex h-screen bg-background overflow-hidden">
-      <Sidebar />
-      <main className="flex-1 overflow-y-auto lg:ml-60 p-4 sm:p-6 lg:p-8 pt-16 lg:pt-8">
-        <div className="p-8 max-w-4xl">
-          <div className="flex items-center gap-3 mb-8">
-            <Settings className="w-8 h-8 text-accent" />
-            <h1 className="text-3xl font-bold">Configuración de WhatsApp Business</h1>
+    <AppShell>
+      <Topbar
+        title="Configuración"
+        right={
+          <PermissionGuard permission="can_manage_org">
+            <button className="btn btn-primary" onClick={handleSave} disabled={saving || loading}>
+              <Icon name="Check" size={13} className="ic" />
+              {saving ? 'Guardando...' : 'Guardar cambios'}
+            </button>
+          </PermissionGuard>
+        }
+      />
+
+      <div className="scroll-area">
+        <div className="page page-narrow">
+          <div style={{ marginBottom: 28 }}>
+            <div className="title-xl" style={{ marginBottom: 4 }}>Configuración</div>
+            <div className="fg-3" style={{ fontSize: 13 }}>Parámetros de integración y organización</div>
           </div>
 
-          <div className="bg-card border border-border rounded-xl p-6 mb-6">
-            <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-4 mb-6">
-              <h3 className="font-bold text-blue-400 mb-2">📱 Cómo obtener tus credenciales de WhatsApp Business</h3>
-              <ol className="text-sm text-gray-300 space-y-2 ml-4 list-decimal">
-                <li>Ve a <a href="https://developers.facebook.com" target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">Meta for Developers</a></li>
-                <li>Crea o selecciona tu aplicación de WhatsApp Business</li>
-                <li>En el panel, ve a WhatsApp &gt; Configuración de API</li>
-                <li>Copia el <strong>Token de acceso</strong> (Access Token)</li>
-                <li>Copia el <strong>ID de número de teléfono</strong> (Phone Number ID)</li>
-                <li>Copia el <strong>ID de cuenta de WhatsApp Business</strong> (Business Account ID)</li>
-                <li>Genera un token de verificación de webhook personalizado</li>
-              </ol>
+          {toast && (
+            <div className={`banner banner-${toast.type === 'success' ? 'success' : 'error'}`} style={{ marginBottom: 20, '--success-soft': 'rgba(52,211,153,0.1)', '--success-line': 'rgba(52,211,153,0.3)' } as any}>
+              <Icon name={toast.type === 'success' ? 'CheckCircle' : 'AlertCircle'} size={16} />
+              <span>{toast.text}</span>
+              <button className="btn btn-ghost btn-icon btn-sm" style={{ marginLeft: 'auto' }} onClick={() => setToast(null)}><Icon name="X" size={12} /></button>
             </div>
+          )}
 
-            {message && (
-              <div className={`mb-6 p-4 rounded-lg border ${
-                message.type === 'success'
-                  ? 'bg-green-500/10 border-green-500/20 text-green-400'
-                  : 'bg-red-500/10 border-red-500/20 text-red-400'
-              }`}>
-                {message.text}
-              </div>
-            )}
-
-            <div className="space-y-6">
+          {/* WhatsApp Business API */}
+          <div className="card" style={{ marginBottom: 16 }}>
+            <div className="card-hd">
               <div>
-                <label className="block text-sm font-medium mb-2">
-                  Access Token *
-                </label>
-                <div className="relative">
-                  <input
-                    type={showToken ? 'text' : 'password'}
-                    value={config.access_token}
-                    onChange={(e) => setConfig({ ...config, access_token: e.target.value })}
-                    className="w-full bg-background border border-border rounded-lg px-4 py-3 pr-12 focus:outline-none focus:border-accent"
-                    placeholder="EAAxxxxxxxxxxxx..."
-                    required
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowToken(!showToken)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white"
-                  >
-                    {showToken ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
-                  </button>
+                <div className="ttl">WhatsApp Business API</div>
+                <div className="sub">Meta for Developers → WhatsApp → Configuración de API</div>
+              </div>
+              <Toggle on={config.is_active} onChange={v => setConfig(p => ({ ...p, is_active: v }))} />
+            </div>
+            <div className="card-body">
+              {loading ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  {Array(4).fill(0).map((_, i) => <div key={i} className="skel" style={{ height: 32 }} />)}
                 </div>
-                <p className="text-xs text-gray-400 mt-1">Token permanente de la API de WhatsApp Business</p>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium mb-2">
-                  Phone Number ID *
-                </label>
-                <input
-                  type="text"
-                  value={config.phone_number_id}
-                  onChange={(e) => setConfig({ ...config, phone_number_id: e.target.value })}
-                  className="w-full bg-background border border-border rounded-lg px-4 py-3 focus:outline-none focus:border-accent"
-                  placeholder="123456789012345"
-                  required
-                />
-                <p className="text-xs text-gray-400 mt-1">ID del número de teléfono de WhatsApp Business</p>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium mb-2">
-                  Business Account ID
-                </label>
-                <input
-                  type="text"
-                  value={config.business_account_id}
-                  onChange={(e) => setConfig({ ...config, business_account_id: e.target.value })}
-                  className="w-full bg-background border border-border rounded-lg px-4 py-3 focus:outline-none focus:border-accent"
-                  placeholder="123456789012345"
-                />
-                <p className="text-xs text-gray-400 mt-1">ID de la cuenta de WhatsApp Business (opcional)</p>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium mb-2">
-                  Webhook Verify Token
-                </label>
-                <input
-                  type="text"
-                  value={config.webhook_verify_token}
-                  onChange={(e) => setConfig({ ...config, webhook_verify_token: e.target.value })}
-                  className="w-full bg-background border border-border rounded-lg px-4 py-3 focus:outline-none focus:border-accent"
-                  placeholder="tu_token_secreto_123"
-                />
-                <p className="text-xs text-gray-400 mt-1">Token para verificar webhooks (puedes crear uno personalizado)</p>
-              </div>
-
-              <div className="flex items-center gap-3">
-                <input
-                  type="checkbox"
-                  id="is_active"
-                  checked={config.is_active}
-                  onChange={(e) => setConfig({ ...config, is_active: e.target.checked })}
-                  className="w-5 h-5 rounded border-border bg-background checked:bg-accent"
-                />
-                <label htmlFor="is_active" className="text-sm font-medium cursor-pointer">
-                  Activar integración de WhatsApp
-                </label>
-              </div>
-            </div>
-
-            <div className="flex gap-3 mt-8">
-              <button
-                onClick={handleSave}
-                disabled={saving || !config.access_token || !config.phone_number_id}
-                className="flex items-center gap-2 bg-accent hover:bg-accent/90 disabled:bg-accent/50 disabled:cursor-not-allowed text-white px-6 py-3 rounded-lg font-medium transition-colors"
-              >
-                <Save className="w-5 h-5" />
-                {saving ? 'Guardando...' : 'Guardar Configuración'}
-              </button>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                  <div>
+                    <label className="label">Access Token *</label>
+                    <div className="input-with-icon">
+                      <button style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-3)' }} onClick={() => setShowToken(!showToken)}>
+                        <Icon name={showToken ? 'EyeOff' : 'Eye'} size={14} />
+                      </button>
+                      <input className="input" type={showToken ? 'text' : 'password'} value={config.access_token} onChange={f('access_token')} placeholder="EAAxxxxxxxxxxxx..." style={{ paddingRight: 36 }} />
+                    </div>
+                    <div className="hint">Token permanente de WhatsApp Business API</div>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                    <div>
+                      <label className="label">Phone Number ID</label>
+                      <input className="input" value={config.phone_number_id} onChange={f('phone_number_id')} placeholder="12345678901234" />
+                    </div>
+                    <div>
+                      <label className="label">Business Account ID</label>
+                      <input className="input" value={config.business_account_id} onChange={f('business_account_id')} placeholder="98765432109876" />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="label">Webhook Verify Token</label>
+                    <input className="input" value={config.webhook_verify_token} onChange={f('webhook_verify_token')} placeholder="mi_token_secreto_123" />
+                    <div className="hint">Token de verificación para el webhook de Meta</div>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
-          <div className="bg-card border border-border rounded-xl p-6">
-            <h3 className="font-bold text-lg mb-3">🔒 Seguridad</h3>
-            <p className="text-sm text-gray-300">
-              Tus credenciales de WhatsApp Business se almacenan de forma segura en la base de datos con políticas de seguridad a nivel de fila (RLS).
-              Solo los administradores de tu organización pueden ver y modificar esta configuración.
-            </p>
+          {/* Pasos manuales */}
+          <div className="card">
+            <div className="card-hd">
+              <div className="ttl">Configuración pendiente en Supabase</div>
+              <span className="badge badge-warning">Manual</span>
+            </div>
+            <div className="card-body">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {[
+                  { icon: 'Globe', title: 'Google OAuth', desc: 'Authentication → Providers → Google → habilitar + Client ID + Secret' },
+                  { icon: 'KeyRound', title: 'JWT Claims Hook', desc: 'Ejecutar migration 029 en SQL Editor, luego Authentication → Auth Hooks → registrar' },
+                  { icon: 'Lock', title: 'MFA TOTP', desc: 'Authentication → Auth Policies → habilitar Multi-Factor Authentication (TOTP)' },
+                ].map(step => (
+                  <div key={step.icon} style={{ display: 'flex', gap: 12, padding: '10px 12px', background: 'var(--bg-3)', borderRadius: 'var(--r-md)', border: '1px solid var(--border-soft)' }}>
+                    <div style={{ width: 32, height: 32, borderRadius: 8, background: 'var(--warning-soft)', border: '1px solid var(--warning-line)', display: 'grid', placeItems: 'center', color: 'var(--warning)', flexShrink: 0 }}>
+                      <Icon name={step.icon} size={15} />
+                    </div>
+                    <div>
+                      <div style={{ fontWeight: 500, fontSize: 13 }}>{step.title}</div>
+                      <div className="fg-3" style={{ fontSize: 12, marginTop: 2 }}>{step.desc}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
+
         </div>
-      </main>
-    </div>
+      </div>
+    </AppShell>
   )
 }

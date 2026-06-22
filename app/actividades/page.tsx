@@ -1,578 +1,301 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import Sidebar from '@/components/Sidebar'
-import { supabase, Activity, formatDate, Client } from '@/lib/supabase'
-import { Activity as ActivityIcon, Search, Plus, MessageCircle, X, Calendar, List } from 'lucide-react'
+import AppShell from '@/components/AppShell'
+import Topbar from '@/components/Topbar'
+import Icon from '@/components/ui/Icon'
+import { Avatar, Badge, Modal, Segmented } from '@/components/ui/Components'
+import { supabase, Client } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth-context'
 
-type NewActivityForm = {
-  client_id: string
+type ActivityRow = {
+  id: string
   channel: string
   activity_type: string
-  subject: string
+  subject?: string
   message: string
-  requires_followup: boolean
-  followup_date: string
+  created_at: string
+  client_id: string
+  client?: { full_name: string; phone: string }
+}
+
+const CHANNEL_MAP: Record<string, { ic: string; label: string; color: string }> = {
+  whatsapp:  { ic: 'MessageCircle', label: 'WhatsApp',  color: 'var(--success)' },
+  messenger: { ic: 'MessageSquare', label: 'Messenger', color: 'var(--info)' },
+  llamada:   { ic: 'Phone',         label: 'Llamada',   color: 'var(--warning)' },
+  call:      { ic: 'Phone',         label: 'Llamada',   color: 'var(--warning)' },
+  email:     { ic: 'Mail',          label: 'Email',     color: 'var(--accent)' },
+  reunion:   { ic: 'Users',         label: 'Reunión',   color: 'var(--fg-2)' },
+  meeting:   { ic: 'Users',         label: 'Reunión',   color: 'var(--fg-2)' },
+}
+
+type ActivityForm = {
+  client_id: string; channel: string; activity_type: string
+  subject: string; message: string; requires_followup: boolean; followup_date: string
 }
 
 export default function ActividadesPage() {
   const { user } = useAuth()
-  const [activities, setActivities] = useState<Activity[]>([])
+  const [activities, setActivities] = useState<ActivityRow[]>([])
   const [clients, setClients] = useState<Client[]>([])
-  const [stats, setStats] = useState({ total: 0, este_mes: 0, semana: 0 })
-  const [searchTerm, setSearchTerm] = useState('')
-  const [selectedChannel, setSelectedChannel] = useState<string>('all')
   const [loading, setLoading] = useState(true)
-  const [showForm, setShowForm] = useState(false)
+  const [search, setSearch] = useState('')
+  const [channelFilter, setChannelFilter] = useState('all')
+  const [showModal, setShowModal] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [viewMode, setViewMode] = useState<'list' | 'calendar'>('list')
-  const [currentMonth, setCurrentMonth] = useState(new Date())
-  const [formData, setFormData] = useState<NewActivityForm>({
-    client_id: '',
-    channel: 'whatsapp',
-    activity_type: 'contacto_inicial',
-    subject: '',
-    message: '',
-    requires_followup: false,
-    followup_date: ''
+  const [form, setForm] = useState<ActivityForm>({
+    client_id: '', channel: 'whatsapp', activity_type: 'contacto_inicial',
+    subject: '', message: '', requires_followup: false, followup_date: '',
   })
 
   useEffect(() => {
-    loadActivities()
-    loadClients()
+    Promise.all([loadActivities(), loadClients()])
   }, [])
 
   async function loadActivities() {
     try {
-      const { data, error } = await supabase
+      const { data } = await supabase
         .from('activities')
-        .select(`
-          *,
-          client:clients(full_name, phone)
-        `)
+        .select('*, client:clients(full_name, phone)')
         .order('created_at', { ascending: false })
-
-      if (error) throw error
-      if (data) {
-        setActivities(data as any)
-
-        const now = new Date()
-        const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1)
-        const thisWeek = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
-
-        const esteMes = data.filter(a => new Date(a.created_at) >= thisMonth).length
-        const semana = data.filter(a => new Date(a.created_at) >= thisWeek).length
-
-        setStats({ total: data.length, este_mes: esteMes, semana })
-      }
-    } catch (error) {
-      console.error('Error loading activities:', error)
+      if (data) setActivities(data as any)
     } finally {
       setLoading(false)
     }
   }
 
   async function loadClients() {
-    try {
-      const { data, error } = await supabase
-        .from('clients')
-        .select('*')
-        .order('full_name')
-
-      if (error) throw error
-      if (data) setClients(data)
-    } catch (error) {
-      console.error('Error loading clients:', error)
-    }
+    const { data } = await supabase.from('clients').select('*').order('full_name')
+    if (data) setClients(data)
   }
 
-  async function handleSaveActivity() {
-    if (!user || !formData.client_id || !formData.message.trim()) {
-      alert('Por favor completa todos los campos requeridos')
-      return
-    }
-
+  async function handleSave(e: React.FormEvent) {
+    e.preventDefault()
+    if (!user || !form.client_id || !form.message.trim()) return
     setSaving(true)
     try {
-      const { error } = await supabase
-        .from('activities')
-        .insert({
-          org_id: user.org_id,
-          client_id: formData.client_id,
-          agent_id: user.id,
-          channel: formData.channel,
-          activity_type: formData.activity_type,
-          subject: formData.subject.trim() || null,
-          message: formData.message.trim(),
-          requires_followup: formData.requires_followup,
-          followup_date: formData.requires_followup && formData.followup_date ? formData.followup_date : null
-        })
-
-      if (error) throw error
-
-      await loadActivities()
-      setShowForm(false)
-      setFormData({
-        client_id: '',
-        channel: 'whatsapp',
-        activity_type: 'contacto_inicial',
-        subject: '',
-        message: '',
-        requires_followup: false,
-        followup_date: ''
+      await supabase.from('activities').insert({
+        org_id: user.org_id, client_id: form.client_id, agent_id: user.id,
+        channel: form.channel, activity_type: form.activity_type,
+        subject: form.subject.trim() || null, message: form.message.trim(),
+        requires_followup: form.requires_followup,
+        followup_date: form.requires_followup && form.followup_date ? form.followup_date : null,
       })
-    } catch (error) {
-      console.error('Error saving activity:', error)
-      alert('Error al guardar la actividad')
+      await loadActivities()
+      setShowModal(false)
+      setForm({ client_id: '', channel: 'whatsapp', activity_type: 'contacto_inicial', subject: '', message: '', requires_followup: false, followup_date: '' })
     } finally {
       setSaving(false)
     }
   }
 
-  const channelConfig: {[key: string]: {color: string, icon: string, label: string}} = {
-    whatsapp: { color: 'bg-[#25D366] text-white', icon: '💬', label: 'WhatsApp' },
-    messenger: { color: 'bg-[#0084FF] text-white', icon: '📱', label: 'Messenger' },
-    llamada: { color: 'bg-accent text-white', icon: '📞', label: 'Llamada' },
-    call: { color: 'bg-accent text-white', icon: '📞', label: 'Llamada' },
-    email: { color: 'bg-warning text-black', icon: '✉️', label: 'Email' },
-    reunion: { color: 'bg-success text-white', icon: '🤝', label: 'Reunión' },
-    meeting: { color: 'bg-success text-white', icon: '🤝', label: 'Reunión' }
-  }
-
-  const channelCounts = activities.reduce((acc, a) => {
-    acc[a.channel] = (acc[a.channel] || 0) + 1
-    return acc
-  }, {} as {[key: string]: number})
-
-  const filteredActivities = activities.filter(a => {
-    const matchesSearch = a.message.toLowerCase().includes(searchTerm.toLowerCase())
-    const matchesChannel = selectedChannel === 'all' || a.channel === selectedChannel
-    return matchesSearch && matchesChannel
+  const filtered = activities.filter(a => {
+    const matchSearch = !search || a.message.toLowerCase().includes(search.toLowerCase()) || a.client?.full_name?.toLowerCase().includes(search.toLowerCase())
+    const matchCh = channelFilter === 'all' || a.channel === channelFilter
+    return matchSearch && matchCh
   })
 
-  const getDaysInMonth = (date: Date) => {
-    const year = date.getFullYear()
-    const month = date.getMonth()
-    const firstDay = new Date(year, month, 1)
-    const lastDay = new Date(year, month + 1, 0)
-    const daysInMonth = lastDay.getDate()
-    const startingDayOfWeek = firstDay.getDay()
+  const now = new Date()
+  const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1)
+  const thisWeek = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
 
-    return { daysInMonth, startingDayOfWeek, year, month }
-  }
-
-  const getActivitiesForDate = (date: Date) => {
-    const dateStr = date.toISOString().split('T')[0]
-    return filteredActivities.filter(activity => {
-      const activityDate = new Date(activity.created_at).toISOString().split('T')[0]
-      return activityDate === dateStr
+  function groupByDay(list: ActivityRow[]) {
+    const groups: { dateStr: string; label: string; items: ActivityRow[] }[] = []
+    const map = new Map<string, ActivityRow[]>()
+    list.forEach(a => {
+      const d = a.created_at.split('T')[0]
+      if (!map.has(d)) map.set(d, [])
+      map.get(d)!.push(a)
     })
+    map.forEach((items, dateStr) => {
+      const d = new Date(dateStr + 'T12:00:00')
+      const today = new Date(); today.setHours(0,0,0,0)
+      const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1)
+      d.setHours(0,0,0,0)
+      const label = d.getTime() === today.getTime() ? 'Hoy'
+        : d.getTime() === yesterday.getTime() ? 'Ayer'
+        : d.toLocaleDateString('es-PY', { day: 'numeric', month: 'long' })
+      groups.push({ dateStr, label, items })
+    })
+    return groups.sort((a, b) => b.dateStr.localeCompare(a.dateStr))
   }
 
-  const previousMonth = () => {
-    setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1))
-  }
-
-  const nextMonth = () => {
-    setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1))
-  }
-
-  if (!user) return null
+  const grouped = groupByDay(filtered)
+  const channels = ['all', ...Array.from(new Set(activities.map(a => a.channel)))]
 
   return (
-    <div className="flex h-screen">
-      <Sidebar />
-      <main className="flex-1 lg:ml-60 p-4 sm:p-6 lg:p-8 overflow-y-auto bg-background pt-16 lg:pt-8">
-        <div className="max-w-7xl mx-auto">
-          <div className="flex items-center justify-between mb-8">
-            <h1 className="text-3xl font-bold">Actividades CRM</h1>
-            <div className="flex items-center gap-3">
-              <div className="flex gap-2 bg-card border border-border rounded-lg p-1">
-                <button
-                  onClick={() => setViewMode('list')}
-                  className={`p-2 rounded transition-colors ${
-                    viewMode === 'list' ? 'bg-accent text-white' : 'text-gray-400 hover:text-white'
-                  }`}
-                >
-                  <List size={20} />
-                </button>
-                <button
-                  onClick={() => setViewMode('calendar')}
-                  className={`p-2 rounded transition-colors ${
-                    viewMode === 'calendar' ? 'bg-accent text-white' : 'text-gray-400 hover:text-white'
-                  }`}
-                >
-                  <Calendar size={20} />
-                </button>
+    <AppShell>
+      <Topbar
+        title="Actividades"
+        right={
+          <button className="btn btn-primary" onClick={() => setShowModal(true)}>
+            <Icon name="Plus" size={13} className="ic" />Nueva actividad
+          </button>
+        }
+      />
+
+      <div className="scroll-area">
+        <div className="page">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 20 }}>
+            <div>
+              <div className="title-xl" style={{ marginBottom: 4 }}>Actividades CRM</div>
+              <div className="fg-3" style={{ fontSize: 13 }}>
+                {activities.length} registros · {activities.filter(a => new Date(a.created_at) >= thisMonth).length} este mes · {activities.filter(a => new Date(a.created_at) >= thisWeek).length} esta semana
               </div>
-              <button
-                onClick={() => setShowForm(true)}
-                className="bg-accent text-white px-6 py-3 rounded-lg font-medium hover:bg-accent/90 transition-colors flex items-center gap-2"
-              >
-                <Plus size={20} />
-                Nueva Actividad
-              </button>
             </div>
           </div>
 
-          <div className="grid grid-cols-4 gap-6 mb-8">
-            <div className="bg-card border border-border rounded-xl p-6">
-              <div className="flex items-center justify-between mb-2">
-                <ActivityIcon className="text-accent" size={24} />
-              </div>
-              <p className="text-3xl font-bold font-mono">{stats.total}</p>
-              <p className="text-sm text-gray-400 mt-1">Total Actividades</p>
+          {/* Toolbar */}
+          <div style={{ display: 'flex', gap: 10, marginBottom: 16, alignItems: 'center' }}>
+            <div className="input-with-icon" style={{ width: 300 }}>
+              <Icon name="Search" size={13} className="ic" />
+              <input className="input" placeholder="Buscar actividades..." value={search} onChange={e => setSearch(e.target.value)} />
             </div>
-
-            <div className="bg-card border border-border rounded-xl p-6">
-              <div className="flex items-center justify-between mb-2">
-                <MessageCircle className="text-accent" size={24} />
-              </div>
-              <p className="text-3xl font-bold font-mono">{stats.este_mes}</p>
-              <p className="text-sm text-gray-400 mt-1">Este Mes</p>
-            </div>
-
-            <div className="bg-card border border-border rounded-xl p-6">
-              <div className="flex items-center justify-between mb-2">
-                <ActivityIcon className="text-accent" size={24} />
-              </div>
-              <p className="text-3xl font-bold font-mono">{stats.semana}</p>
-              <p className="text-sm text-gray-400 mt-1">Última Semana</p>
-            </div>
-
-            <div className="bg-card border border-border rounded-xl p-6">
-              <div className="flex items-center justify-between mb-2">
-                <MessageCircle className="text-accent" size={24} />
-              </div>
-              <p className="text-3xl font-bold font-mono">
-                {Object.keys(channelCounts).length > 0
-                  ? Object.entries(channelCounts).sort((a, b) => b[1] - a[1])[0][0]
-                  : '—'}
-              </p>
-              <p className="text-sm text-gray-400 mt-1">Canal Más Usado</p>
-            </div>
-          </div>
-
-          <div className="bg-card border border-border rounded-xl p-6 mb-6">
-            <h2 className="text-lg font-bold mb-4">Distribución por Canal</h2>
-            <div className="flex flex-wrap gap-2">
-              <button
-                onClick={() => setSelectedChannel('all')}
-                className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-                  selectedChannel === 'all'
-                    ? 'bg-accent text-white'
-                    : 'bg-border text-gray-300 hover:bg-border/80'
-                }`}
-              >
-                Todos ({activities.length})
-              </button>
-              {Object.entries(channelCounts).map(([channel, count]) => {
-                const config = channelConfig[channel] || { color: 'bg-border text-white', icon: '📋', label: channel }
+            <div className="seg">
+              {channels.slice(0, 5).map(ch => {
+                const info = CHANNEL_MAP[ch]
                 return (
-                  <button
-                    key={channel}
-                    onClick={() => setSelectedChannel(channel)}
-                    className={`px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2 ${
-                      selectedChannel === channel
-                        ? config.color
-                        : 'bg-border text-gray-300 hover:bg-border/80'
-                    }`}
-                  >
-                    <span>{config.icon}</span>
-                    <span>{config.label}</span>
-                    <span className="font-mono">({count})</span>
+                  <button key={ch} className={channelFilter === ch ? 'active' : ''} onClick={() => setChannelFilter(ch)}>
+                    {ch === 'all' ? 'Todos' : info?.label ?? ch}
                   </button>
                 )
               })}
             </div>
           </div>
 
-          <div className="bg-card border border-border rounded-xl p-4 mb-6">
-            <div className="relative">
-              <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
-              <input
-                type="text"
-                placeholder="Buscar actividades..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full bg-background border border-border rounded-lg pl-12 pr-4 py-3 text-white placeholder-gray-400 focus:outline-none focus:border-accent"
-              />
-              <div className="absolute right-4 top-1/2 -translate-y-1/2 text-sm text-gray-400">
-                {filteredActivities.length} resultado{filteredActivities.length !== 1 ? 's' : ''}
-              </div>
-            </div>
-          </div>
-
+          {/* Timeline */}
           {loading ? (
-            <div className="text-center py-20">
-              <div className="animate-spin w-12 h-12 border-4 border-accent border-t-transparent rounded-full mx-auto"></div>
-            </div>
-          ) : viewMode === 'list' ? (
-            filteredActivities.length === 0 ? (
-              <div className="bg-card border border-border rounded-xl p-12 text-center">
-                <p className="text-gray-400 text-lg">No hay actividades registradas</p>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {filteredActivities.map((activity: any) => {
-                  const config = channelConfig[activity.channel] || { color: 'bg-border text-white', icon: '📋', label: activity.channel }
-                  return (
-                    <div
-                      key={activity.id}
-                      className="bg-card border border-border rounded-xl p-4 hover:border-accent transition-all cursor-pointer"
-                    >
-                      <div className="flex items-start gap-4">
-                        <div className={`w-12 h-12 rounded-lg ${config.color} flex items-center justify-center text-2xl flex-shrink-0`}>
-                          {config.icon}
-                        </div>
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-1">
-                            <p className="font-bold">{activity.client?.full_name || 'Cliente'}</p>
-                            <span className={`px-2 py-0.5 rounded text-xs ${config.color}`}>
-                              {config.label}
-                            </span>
-                            {activity.activity_type && (
-                              <span className="px-2 py-0.5 rounded text-xs bg-border text-gray-300">
-                                {activity.activity_type.replace(/_/g, ' ')}
-                              </span>
-                            )}
-                          </div>
-                          {activity.subject && (
-                            <p className="font-medium text-white mb-1">{activity.subject}</p>
-                          )}
-                          <p className="text-gray-300 mb-2">{activity.message}</p>
-                          <div className="flex items-center gap-4 text-sm text-gray-400">
-                            <span>{formatDate(activity.created_at)}</span>
-                            {activity.requires_followup && (
-                              <span className="text-warning">
-                                📅 Seguimiento: {activity.followup_date ? new Date(activity.followup_date).toLocaleDateString('es-PY') : 'Pendiente'}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            )
-          ) : (
-            <div className="bg-card border border-border rounded-xl overflow-hidden">
-              <div className="bg-border p-4 flex items-center justify-between">
-                <button
-                  onClick={previousMonth}
-                  className="px-4 py-2 bg-background rounded-lg hover:bg-background/80 transition-colors"
-                >
-                  ← Anterior
-                </button>
-                <h2 className="text-xl font-bold">
-                  {currentMonth.toLocaleDateString('es-PY', { month: 'long', year: 'numeric' })}
-                </h2>
-                <button
-                  onClick={nextMonth}
-                  className="px-4 py-2 bg-background rounded-lg hover:bg-background/80 transition-colors"
-                >
-                  Siguiente →
-                </button>
-              </div>
-
-              <div className="grid grid-cols-7 bg-border">
-                {['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'].map((day) => (
-                  <div key={day} className="p-3 text-center font-bold text-sm border-r border-background last:border-r-0">
-                    {day}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {Array(8).fill(0).map((_, i) => (
+                <div key={i} className="card" style={{ padding: 14, display: 'flex', gap: 12 }}>
+                  <div className="skel" style={{ width: 28, height: 28, borderRadius: 7 }} />
+                  <div style={{ flex: 1 }}>
+                    <div className="skel" style={{ width: '30%', height: 11, marginBottom: 6 }} />
+                    <div className="skel" style={{ width: '70%', height: 11 }} />
                   </div>
-                ))}
-              </div>
-
-              <div className="grid grid-cols-7">
-                {(() => {
-                  const { daysInMonth, startingDayOfWeek, year, month } = getDaysInMonth(currentMonth)
-                  const cells = []
-
-                  for (let i = 0; i < startingDayOfWeek; i++) {
-                    cells.push(
-                      <div key={`empty-${i}`} className="min-h-[120px] bg-background/50 border border-border"></div>
-                    )
-                  }
-
-                  for (let day = 1; day <= daysInMonth; day++) {
-                    const date = new Date(year, month, day)
-                    const dayActivities = getActivitiesForDate(date)
-                    const isToday = new Date().toDateString() === date.toDateString()
-
-                    cells.push(
-                      <div
-                        key={day}
-                        className={`min-h-[120px] p-2 border border-border hover:bg-border/30 transition-colors ${
-                          isToday ? 'bg-accent/10 border-accent' : ''
-                        }`}
-                      >
-                        <div className={`text-sm font-bold mb-2 ${isToday ? 'text-accent' : ''}`}>
-                          {day}
+                </div>
+              ))}
+            </div>
+          ) : filtered.length === 0 ? (
+            <div style={{ padding: '56px 24px', textAlign: 'center', color: 'var(--fg-3)' }}>
+              <div style={{ fontSize: 32, marginBottom: 12 }}>📋</div>
+              <div style={{ fontWeight: 500, marginBottom: 4 }}>Sin actividades</div>
+              <div style={{ fontSize: 13 }}>Registrá tu primera actividad con un cliente.</div>
+            </div>
+          ) : (
+            grouped.map(group => (
+              <div key={group.dateStr} style={{ marginBottom: 24 }}>
+                <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--fg-3)', marginBottom: 8, fontFamily: 'var(--font-mono)' }}>
+                  {group.label}
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {group.items.map(a => {
+                    const ch = CHANNEL_MAP[a.channel] || CHANNEL_MAP.llamada
+                    const time = new Date(a.created_at).toLocaleTimeString('es-PY', { hour: '2-digit', minute: '2-digit' })
+                    return (
+                      <div key={a.id} className="card" style={{ padding: '12px 14px', display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                        <div style={{
+                          width: 30, height: 30, borderRadius: 8, background: 'var(--bg-3)',
+                          border: '1px solid var(--border-soft)', display: 'grid', placeItems: 'center',
+                          color: ch.color, flexShrink: 0,
+                        }}>
+                          <Icon name={ch.ic} size={14} />
                         </div>
-                        <div className="space-y-1">
-                          {dayActivities.slice(0, 3).map((activity: any) => {
-                            const config = channelConfig[activity.channel] || { color: 'bg-border text-white', icon: '📋', label: activity.channel }
-                            return (
-                              <div
-                                key={activity.id}
-                                className={`text-xs p-1 rounded ${config.color} truncate cursor-pointer hover:opacity-80`}
-                                title={`${activity.client?.full_name}: ${activity.message}`}
-                              >
-                                <span className="mr-1">{config.icon}</span>
-                                {activity.client?.full_name}
-                              </div>
-                            )
-                          })}
-                          {dayActivities.length > 3 && (
-                            <div className="text-xs text-gray-400 pl-1">
-                              +{dayActivities.length - 3} más
-                            </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
+                            <div style={{ fontWeight: 500, fontSize: 13 }}>{a.client?.full_name ?? 'Cliente'}</div>
+                            <span className="fg-3 mono" style={{ fontSize: 11, flexShrink: 0 }}>{time}</span>
+                          </div>
+                          {a.subject && (
+                            <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--fg-1)', marginTop: 2 }}>{a.subject}</div>
                           )}
+                          <div className="fg-2" style={{ fontSize: 12, marginTop: 2 }}>{a.message}</div>
+                          <div style={{ marginTop: 6 }}>
+                            <span style={{
+                              display: 'inline-flex', alignItems: 'center', gap: 4,
+                              fontSize: 11, color: ch.color, background: 'var(--bg-3)',
+                              border: '1px solid var(--border-soft)', borderRadius: 999,
+                              padding: '2px 8px',
+                            }}>
+                              <Icon name={ch.ic} size={10} />
+                              {ch.label}
+                            </span>
+                          </div>
                         </div>
                       </div>
                     )
-                  }
-
-                  return cells
-                })()}
+                  })}
+                </div>
               </div>
-            </div>
+            ))
           )}
         </div>
+      </div>
 
-        {showForm && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-card border border-border rounded-xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-              <div className="flex items-center justify-between mb-6">
-                <h2 className="text-2xl font-bold">Nueva Actividad</h2>
-                <button
-                  onClick={() => setShowForm(false)}
-                  className="text-gray-400 hover:text-white"
-                >
-                  <X size={24} />
-                </button>
+      <Modal
+        open={showModal}
+        onClose={() => setShowModal(false)}
+        title="Nueva actividad"
+        subtitle="Registrá una interacción con un cliente"
+        footer={
+          <div className="hstack" style={{ marginLeft: 'auto' }}>
+            <button className="btn" onClick={() => setShowModal(false)}>Cancelar</button>
+            <button className="btn btn-primary" onClick={e => handleSave(e as any)} disabled={saving}>
+              {saving ? 'Guardando...' : 'Registrar'}
+            </button>
+          </div>
+        }
+      >
+        <form onSubmit={handleSave}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div>
+              <label className="label">Cliente *</label>
+              <select className="select" value={form.client_id} onChange={e => setForm(p => ({ ...p, client_id: e.target.value }))} required>
+                <option value="">Seleccionar cliente...</option>
+                {clients.map(c => <option key={c.id} value={c.id}>{c.full_name}</option>)}
+              </select>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <div>
+                <label className="label">Canal</label>
+                <select className="select" value={form.channel} onChange={e => setForm(p => ({ ...p, channel: e.target.value }))}>
+                  <option value="whatsapp">WhatsApp</option>
+                  <option value="messenger">Messenger</option>
+                  <option value="llamada">Llamada</option>
+                  <option value="email">Email</option>
+                  <option value="reunion">Reunión</option>
+                </select>
               </div>
-
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium mb-2">Cliente *</label>
-                  <select
-                    value={formData.client_id}
-                    onChange={(e) => setFormData({...formData, client_id: e.target.value})}
-                    className="w-full bg-background border border-border rounded-lg px-4 py-2 text-white focus:outline-none focus:border-accent"
-                  >
-                    <option value="">Selecciona un cliente</option>
-                    {clients.map((client) => (
-                      <option key={client.id} value={client.id}>
-                        {client.full_name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium mb-2">Canal *</label>
-                    <select
-                      value={formData.channel}
-                      onChange={(e) => setFormData({...formData, channel: e.target.value})}
-                      className="w-full bg-background border border-border rounded-lg px-4 py-2 text-white focus:outline-none focus:border-accent"
-                    >
-                      <option value="whatsapp">WhatsApp</option>
-                      <option value="messenger">Messenger</option>
-                      <option value="llamada">Llamada</option>
-                      <option value="email">Email</option>
-                      <option value="reunion">Reunión</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium mb-2">Tipo de Actividad *</label>
-                    <select
-                      value={formData.activity_type}
-                      onChange={(e) => setFormData({...formData, activity_type: e.target.value})}
-                      className="w-full bg-background border border-border rounded-lg px-4 py-2 text-white focus:outline-none focus:border-accent"
-                    >
-                      <option value="contacto_inicial">Contacto Inicial</option>
-                      <option value="seguimiento">Seguimiento</option>
-                      <option value="cotizacion">Cotización</option>
-                      <option value="recordatorio">Recordatorio</option>
-                      <option value="renovacion">Renovación</option>
-                      <option value="reclamo">Reclamo</option>
-                      <option value="otro">Otro</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium mb-2">Asunto</label>
-                  <input
-                    type="text"
-                    value={formData.subject}
-                    onChange={(e) => setFormData({...formData, subject: e.target.value})}
-                    placeholder="Ej: Consulta sobre plan Confort"
-                    className="w-full bg-background border border-border rounded-lg px-4 py-2 text-white focus:outline-none focus:border-accent"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium mb-2">Mensaje *</label>
-                  <textarea
-                    value={formData.message}
-                    onChange={(e) => setFormData({...formData, message: e.target.value})}
-                    placeholder="Describe la interacción con el cliente..."
-                    rows={4}
-                    className="w-full bg-background border border-border rounded-lg px-4 py-2 text-white focus:outline-none focus:border-accent resize-none"
-                  />
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    id="followup"
-                    checked={formData.requires_followup}
-                    onChange={(e) => setFormData({...formData, requires_followup: e.target.checked})}
-                    className="w-4 h-4 rounded border-border bg-background text-accent focus:ring-accent"
-                  />
-                  <label htmlFor="followup" className="text-sm font-medium">
-                    Requiere seguimiento
-                  </label>
-                </div>
-
-                {formData.requires_followup && (
-                  <div>
-                    <label className="block text-sm font-medium mb-2">Fecha de Seguimiento</label>
-                    <input
-                      type="date"
-                      value={formData.followup_date}
-                      onChange={(e) => setFormData({...formData, followup_date: e.target.value})}
-                      className="w-full bg-background border border-border rounded-lg px-4 py-2 text-white focus:outline-none focus:border-accent"
-                    />
-                  </div>
-                )}
-
-                <div className="flex gap-3 pt-4">
-                  <button
-                    onClick={() => setShowForm(false)}
-                    className="flex-1 bg-border text-white px-6 py-3 rounded-lg font-medium hover:bg-border/80 transition-colors"
-                  >
-                    Cancelar
-                  </button>
-                  <button
-                    onClick={handleSaveActivity}
-                    disabled={saving}
-                    className="flex-1 bg-accent text-white px-6 py-3 rounded-lg font-medium hover:bg-accent/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {saving ? 'Guardando...' : 'Guardar'}
-                  </button>
-                </div>
+              <div>
+                <label className="label">Tipo</label>
+                <select className="select" value={form.activity_type} onChange={e => setForm(p => ({ ...p, activity_type: e.target.value }))}>
+                  <option value="contacto_inicial">Contacto inicial</option>
+                  <option value="seguimiento">Seguimiento</option>
+                  <option value="cotizacion">Cotización</option>
+                  <option value="cierre">Cierre</option>
+                  <option value="renovacion">Renovación</option>
+                  <option value="reclamo">Reclamo</option>
+                </select>
               </div>
             </div>
+            <div>
+              <label className="label">Asunto</label>
+              <input className="input" value={form.subject} onChange={e => setForm(p => ({ ...p, subject: e.target.value }))} placeholder="Resumen corto (opcional)" />
+            </div>
+            <div>
+              <label className="label">Notas *</label>
+              <textarea className="input" rows={4} value={form.message} onChange={e => setForm(p => ({ ...p, message: e.target.value }))} required placeholder="Detallá la interacción..." />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <input type="checkbox" className="chk" checked={form.requires_followup} onChange={e => setForm(p => ({ ...p, requires_followup: e.target.checked }))} id="followup" />
+              <label htmlFor="followup" style={{ fontSize: 13, cursor: 'pointer' }}>Requiere seguimiento</label>
+              {form.requires_followup && (
+                <input className="input" type="date" value={form.followup_date} onChange={e => setForm(p => ({ ...p, followup_date: e.target.value }))} style={{ width: 160 }} />
+              )}
+            </div>
           </div>
-        )}
-      </main>
-    </div>
+        </form>
+      </Modal>
+    </AppShell>
   )
 }

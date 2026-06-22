@@ -16,7 +16,10 @@ import {
   Settings,
   LogOut,
   Menu,
-  X
+  X,
+  ClipboardList,
+  BarChart2,
+  Send,
 } from 'lucide-react'
 
 const menuItems = [
@@ -34,7 +37,7 @@ const menuItems = [
 export default function Sidebar() {
   const pathname = usePathname()
   const router = useRouter()
-  const { user, logout } = useAuth()
+  const { user, permissions, logout } = useAuth()
   const [isOpen, setIsOpen] = useState(false)
 
   function handleLogout() {
@@ -112,6 +115,54 @@ export default function Sidebar() {
                 </li>
               )
             })}
+            {permissions?.can_view_reports && (
+              <li>
+                <Link
+                  href="/reportes"
+                  onClick={closeSidebar}
+                  className={`flex items-center gap-3 px-4 py-3 rounded-lg transition-all ${
+                    pathname === '/reportes'
+                      ? 'bg-accent text-white'
+                      : 'text-gray-300 hover:bg-border hover:text-white'
+                  }`}
+                >
+                  <BarChart2 size={20} />
+                  <span className="font-medium">Reportes</span>
+                </Link>
+              </li>
+            )}
+            {(permissions?.can_create_campaigns || permissions?.can_send_campaigns) && (
+              <li>
+                <Link
+                  href="/campanas"
+                  onClick={closeSidebar}
+                  className={`flex items-center gap-3 px-4 py-3 rounded-lg transition-all ${
+                    pathname === '/campanas'
+                      ? 'bg-accent text-white'
+                      : 'text-gray-300 hover:bg-border hover:text-white'
+                  }`}
+                >
+                  <Send size={20} />
+                  <span className="font-medium">Campañas</span>
+                </Link>
+              </li>
+            )}
+            {permissions?.can_view_audit_log && (
+              <li>
+                <Link
+                  href="/auditoria"
+                  onClick={closeSidebar}
+                  className={`flex items-center gap-3 px-4 py-3 rounded-lg transition-all ${
+                    pathname === '/auditoria'
+                      ? 'bg-accent text-white'
+                      : 'text-gray-300 hover:bg-border hover:text-white'
+                  }`}
+                >
+                  <ClipboardList size={20} />
+                  <span className="font-medium">Auditoría</span>
+                </Link>
+              </li>
+            )}
           </ul>
         </nav>
 

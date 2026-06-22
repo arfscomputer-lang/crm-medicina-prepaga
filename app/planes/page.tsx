@@ -1,430 +1,290 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import Sidebar from '@/components/Sidebar'
+import AppShell from '@/components/AppShell'
+import Topbar from '@/components/Topbar'
+import Icon from '@/components/ui/Icon'
+import { Badge, Modal, Segmented, Empty, SortHeader } from '@/components/ui/Components'
 import { supabase, ClientPlan, formatCurrency, formatDate } from '@/lib/supabase'
-import { Plus, Trash2, X } from 'lucide-react'
 
-type Client = {
-  id: string
-  first_name: string
-  last_name: string
-  email: string
-  phone: string
+type Client = { id: string; first_name: string; last_name: string; full_name?: string }
+type CatalogPlan = { id: string; plan_tier: string; plan_name: string; monthly_premium: number }
+
+const PLAN_TONES: Record<string, string> = {
+  sana: 'sana', confort: 'confort', excellent: 'excellent', adultos_mayores: 'adultos',
 }
-
-type PlanCatalog = {
-  id: string
-  plan_tier: string
-  plan_name: string
-  monthly_premium: number
+const PLAN_NAMES: Record<string, string> = {
+  sana: 'Sana', confort: 'Confort', excellent: 'Excellent', adultos_mayores: 'Adultos Mayores',
+}
+const STATUS_MAP: Record<string, { label: string; variant: 'success' | 'accent' | 'error' | 'warning' | 'neutral' }> = {
+  activo:     { label: 'Activo',     variant: 'success' },
+  cotizado:   { label: 'Cotizado',   variant: 'accent'  },
+  vencido:    { label: 'Vencido',    variant: 'error'   },
+  suspendido: { label: 'Suspendido', variant: 'warning' },
+  cancelado:  { label: 'Cancelado',  variant: 'neutral' },
 }
 
 export default function PlanesPage() {
   const [plans, setPlans] = useState<ClientPlan[]>([])
-  const [filter, setFilter] = useState<'all' | 'activo' | 'cotizado' | 'vencido'>('all')
-  const [loading, setLoading] = useState(true)
-  const [showModal, setShowModal] = useState(false)
   const [clients, setClients] = useState<Client[]>([])
-  const [catalogPlans, setCatalogPlans] = useState<PlanCatalog[]>([])
-  const [formData, setFormData] = useState({
-    client_id: '',
-    plan_catalog_id: '',
-    num_beneficiaries: 1,
-    monthly_premium: 0,
-    commission_pct: 25,
-    status: 'cotizado' as 'cotizado' | 'activo',
-    start_date: '',
-    end_date: ''
+  const [catalog, setCatalog] = useState<CatalogPlan[]>([])
+  const [loading, setLoading] = useState(true)
+  const [filter, setFilter] = useState('todos')
+  const [showModal, setShowModal] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [form, setForm] = useState({
+    client_id: '', plan_catalog_id: '', num_beneficiaries: 1,
+    monthly_premium: 0, commission_pct: 25, status: 'cotizado', start_date: '', end_date: '',
   })
 
   useEffect(() => {
-    loadPlans()
-    loadClients()
-    loadCatalogPlans()
+    Promise.all([loadPlans(), loadClients(), loadCatalog()])
   }, [])
 
   async function loadPlans() {
-    try {
-      const { data, error } = await supabase
-        .from('client_plans')
-        .select('*')
-        .order('created_at', { ascending: false })
-
-      if (error) throw error
-      if (data) setPlans(data)
-    } catch (error) {
-      console.error('Error loading plans:', error)
-    } finally {
-      setLoading(false)
-    }
+    const { data } = await supabase.from('client_plans').select('*').order('created_at', { ascending: false })
+    if (data) setPlans(data)
+    setLoading(false)
   }
 
   async function loadClients() {
-    try {
-      const { data, error } = await supabase
-        .from('clients')
-        .select('id, first_name, last_name, email, phone')
-        .order('first_name')
-
-      if (error) throw error
-      if (data) setClients(data)
-    } catch (error) {
-      console.error('Error loading clients:', error)
-    }
+    const { data } = await supabase.from('clients').select('id, first_name, last_name, full_name').order('first_name')
+    if (data) setClients(data)
   }
 
-  async function loadCatalogPlans() {
-    try {
-      const { data, error } = await supabase
-        .from('plan_catalog')
-        .select('id, plan_tier, plan_name, monthly_premium')
-        .order('plan_tier')
-
-      if (error) throw error
-      if (data) setCatalogPlans(data)
-    } catch (error) {
-      console.error('Error loading catalog plans:', error)
-    }
+  async function loadCatalog() {
+    const { data } = await supabase.from('plan_catalog').select('id, plan_tier, plan_name, monthly_premium').order('plan_tier')
+    if (data) setCatalog(data)
   }
 
-  async function handleSubmit(e: React.FormEvent) {
+  async function handleSave(e: React.FormEvent) {
     e.preventDefault()
-
+    const selected = catalog.find(p => p.id === form.plan_catalog_id)
+    if (!selected) return
+    setSaving(true)
     try {
-      const selectedPlan = catalogPlans.find(p => p.id === formData.plan_catalog_id)
-      if (!selectedPlan) return
-
-      const { error } = await supabase
-        .from('client_plans')
-        .insert({
-          client_id: formData.client_id,
-          plan_catalog_id: formData.plan_catalog_id,
-          plan_tier: selectedPlan.plan_tier,
-          num_beneficiaries: formData.num_beneficiaries,
-          monthly_premium: formData.monthly_premium,
-          commission_pct: formData.commission_pct,
-          status: formData.status,
-          start_date: formData.start_date || null,
-          end_date: formData.end_date || null
-        })
-
-      if (error) throw error
-
-      setShowModal(false)
-      setFormData({
-        client_id: '',
-        plan_catalog_id: '',
-        num_beneficiaries: 1,
-        monthly_premium: 0,
-        commission_pct: 25,
-        status: 'cotizado',
-        start_date: '',
-        end_date: ''
+      await supabase.from('client_plans').insert({
+        client_id: form.client_id, plan_catalog_id: form.plan_catalog_id,
+        plan_tier: selected.plan_tier, num_beneficiaries: form.num_beneficiaries,
+        monthly_premium: form.monthly_premium, commission_pct: form.commission_pct,
+        status: form.status, start_date: form.start_date || null, end_date: form.end_date || null,
       })
-      loadPlans()
-    } catch (error) {
-      console.error('Error creating plan:', error)
+      await loadPlans()
+      setShowModal(false)
+      setForm({ client_id: '', plan_catalog_id: '', num_beneficiaries: 1, monthly_premium: 0, commission_pct: 25, status: 'cotizado', start_date: '', end_date: '' })
+    } finally {
+      setSaving(false)
     }
   }
 
-  function handlePlanSelect(planId: string) {
-    const selectedPlan = catalogPlans.find(p => p.id === planId)
-    if (selectedPlan) {
-      setFormData(prev => ({
-        ...prev,
-        plan_catalog_id: planId,
-        monthly_premium: selectedPlan.monthly_premium
-      }))
-    }
+  const filtered = filter === 'todos' ? plans : plans.filter(p => p.status === filter)
+  const now = new Date()
+  const infoRenovar = filtered.filter(p => {
+    if (!p.end_date || p.status !== 'activo') return false
+    const d = Math.floor((new Date(p.end_date).getTime() - now.getTime()) / 86400000)
+    return d >= 0 && d <= 14
+  })
+
+  function fmtGs(n: number) {
+    if (n >= 1_000_000) return `Gs. ${(n / 1_000_000).toFixed(1)}M`
+    if (n >= 1_000) return `Gs. ${Math.round(n / 1_000)}K`
+    return `Gs. ${n}`
   }
 
-  const filteredPlans = filter === 'all'
-    ? plans
-    : plans.filter(p => p.status === filter)
-
-  const planColors: {[key: string]: string} = {
-    sana: 'bg-sana text-white',
-    confort: 'bg-confort text-black',
-    excellent: 'bg-excellent text-white',
-    adultos_mayores: 'bg-adultos text-white'
-  }
-
-  const planIcons: {[key: string]: string} = {
-    sana: '🌿',
-    confort: '⭐',
-    excellent: '💎',
-    adultos_mayores: '🤝'
-  }
-
-  const statusColors: {[key: string]: string} = {
-    cotizado: 'bg-accent text-white',
-    activo: 'bg-success text-white',
-    vencido: 'bg-error text-white',
-    suspendido: 'bg-warning text-black',
-    cancelado: 'bg-gray-600 text-white'
+  const urgency = (p: ClientPlan) => {
+    if (!p.end_date || p.status !== 'activo') return null
+    const d = Math.floor((new Date(p.end_date).getTime() - now.getTime()) / 86400000)
+    if (d < 0) return 'vencido'
+    if (d <= 7) return 'urgent'
+    if (d <= 14) return 'warning'
+    return null
   }
 
   return (
-    <div className="flex h-screen">
-      <Sidebar />
-      <main className="flex-1 lg:ml-60 p-4 sm:p-6 lg:p-8 overflow-y-auto bg-background pt-16 lg:pt-8">
-        <div className="max-w-7xl mx-auto">
-          <div className="flex items-center justify-between mb-8">
-            <h1 className="text-3xl font-bold">Planes Activos</h1>
-            <button
-              onClick={() => setShowModal(true)}
-              className="bg-accent text-white px-6 py-3 rounded-lg font-medium hover:bg-accent/90 transition-colors flex items-center gap-2"
-            >
-              <Plus size={20} />
-              Asignar Plan
-            </button>
+    <AppShell>
+      <Topbar
+        title="Planes"
+        right={
+          <button className="btn btn-primary" onClick={() => setShowModal(true)}>
+            <Icon name="Plus" size={13} className="ic" />Asignar plan
+          </button>
+        }
+      />
+
+      <div className="scroll-area">
+        <div className="page">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 20 }}>
+            <div>
+              <div className="title-xl" style={{ marginBottom: 4 }}>Planes contratados</div>
+              <div className="fg-3" style={{ fontSize: 13 }}>
+                {plans.filter(p => p.status === 'activo').length} activos · {plans.filter(p => p.status === 'cotizado').length} cotizados · {fmtGs(plans.filter(p => p.status === 'activo').reduce((a, p) => a + (p.monthly_premium || 0), 0))} prima mensual
+              </div>
+            </div>
+            <Segmented
+              options={[
+                { value: 'todos',   label: 'Todos'    },
+                { value: 'activo',  label: 'Activos'  },
+                { value: 'cotizado',label: 'Cotizados'},
+                { value: 'vencido', label: 'Vencidos' },
+              ]}
+              value={filter}
+              onChange={setFilter}
+            />
           </div>
 
-          <div className="flex gap-2 mb-6">
-            {(['all', 'activo', 'cotizado', 'vencido'] as const).map(status => (
-              <button
-                key={status}
-                onClick={() => setFilter(status)}
-                className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-                  filter === status
-                    ? 'bg-accent text-white'
-                    : 'bg-card border border-border text-gray-300 hover:bg-border'
-                }`}
-              >
-                {status === 'all' ? 'Todos' : status.charAt(0).toUpperCase() + status.slice(1)}
-              </button>
-            ))}
-          </div>
+          {infoRenovar.length > 0 && (
+            <div className="banner banner-warning" style={{ marginBottom: 16 }}>
+              <Icon name="AlertTriangle" size={16} />
+              <div style={{ flex: 1 }}>
+                <b>{infoRenovar.length} plan{infoRenovar.length !== 1 ? 'es' : ''} vence{infoRenovar.length === 1 ? '' : 'n'} en los próximos 14 días</b>
+                <span className="sub" style={{ marginLeft: 8 }}>Gs. {fmtGs(infoRenovar.reduce((a, p) => a + (p.monthly_premium || 0), 0))} en primas</span>
+              </div>
+            </div>
+          )}
 
-          {loading ? (
-            <div className="text-center py-20">
-              <div className="animate-spin w-12 h-12 border-4 border-accent border-t-transparent rounded-full mx-auto"></div>
-            </div>
-          ) : filteredPlans.length === 0 ? (
-            <div className="bg-card border border-border rounded-xl p-12 text-center">
-              <p className="text-gray-400 text-lg">No hay planes {filter !== 'all' ? filter + 's' : 'registrados'}</p>
-            </div>
-          ) : (
-            <div className="bg-card border border-border rounded-xl overflow-hidden">
-              <table className="w-full">
-                <thead className="bg-border">
+          <div className="tbl-wrap">
+            {loading ? (
+              <div style={{ padding: '40px 16px' }}>
+                {Array(5).fill(0).map((_, i) => (
+                  <div key={i} style={{ display: 'flex', gap: 12, padding: '10px 12px', borderBottom: '1px solid var(--border-soft)', alignItems: 'center' }}>
+                    <div className="skel" style={{ width: '20%', height: 11 }} />
+                    <div className="skel" style={{ width: '15%', height: 20, borderRadius: 999 }} />
+                    <div className="skel" style={{ width: '10%', height: 11 }} />
+                    <div className="skel" style={{ width: '15%', height: 11, marginLeft: 'auto' }} />
+                  </div>
+                ))}
+              </div>
+            ) : filtered.length === 0 ? (
+              <Empty
+                icon="ShieldCheck"
+                title={`No hay planes ${filter !== 'todos' ? filter + 's' : 'registrados'}`}
+                sub="Asigná un plan a un cliente para que aparezca aquí."
+                action={<button className="btn btn-primary" onClick={() => setShowModal(true)}><Icon name="Plus" size={13} className="ic" />Asignar plan</button>}
+              />
+            ) : (
+              <table className="tbl">
+                <thead>
                   <tr>
-                    <th className="text-left p-4">Cliente</th>
-                    <th className="text-left p-4">Plan</th>
-                    <th className="text-left p-4">Beneficiarios</th>
-                    <th className="text-right p-4">Prima/Mes</th>
-                    <th className="text-center p-4">Comisión</th>
-                    <th className="text-left p-4">Vigencia</th>
-                    <th className="text-center p-4">Estado</th>
-                    <th className="text-center p-4"></th>
+                    <th>Cliente</th>
+                    <th>Plan</th>
+                    <th>Benef.</th>
+                    <th className="num">Prima/mes</th>
+                    <th className="num">Com. %</th>
+                    <th className="num">Com./mes</th>
+                    <th>Vigencia</th>
+                    <th>Estado</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredPlans.map((plan) => {
-                    const comisionMensual = (plan.monthly_premium * plan.commission_pct) / 100
+                  {filtered.map(plan => {
+                    const tone = PLAN_TONES[plan.plan_tier] || 'confort'
+                    const statusInfo = STATUS_MAP[plan.status] || { label: plan.status, variant: 'neutral' as const }
+                    const urg = urgency(plan)
+                    const comMensual = ((plan.monthly_premium || 0) * (plan.commission_pct || 0)) / 100
                     return (
-                      <tr
-                        key={plan.id}
-                        className="border-t border-border hover:bg-border transition-colors"
-                      >
-                        <td className="p-4">
-                          <p className="font-medium">Cliente</p>
-                        </td>
-                        <td className="p-4">
-                          <div className="flex items-center gap-2">
-                            <span className="text-xl">{planIcons[plan.plan_tier]}</span>
-                            <span className={`px-3 py-1 rounded-full text-xs font-medium ${planColors[plan.plan_tier]}`}>
-                              {plan.plan_tier.replace('_', ' ').toUpperCase()}
-                            </span>
+                      <tr key={plan.id}>
+                        <td style={{ fontWeight: 500 }}>Cliente</td>
+                        <td>
+                          <div className="hstack">
+                            <span className={`plan-dot plan-${tone}`} />
+                            <span style={{ fontSize: 12, color: `var(--plan-${tone})`, fontWeight: 500 }}>{PLAN_NAMES[plan.plan_tier] ?? plan.plan_tier}</span>
                           </div>
                         </td>
-                        <td className="p-4 text-center font-mono">{plan.num_beneficiaries}</td>
-                        <td className="p-4 text-right font-mono font-bold">{formatCurrency(plan.monthly_premium)}</td>
-                        <td className="p-4 text-center">
-                          <div>
-                            <span className="px-2 py-1 bg-accent/20 text-accent rounded text-xs font-mono">
-                              {plan.commission_pct}%
-                            </span>
-                            <p className="text-xs text-success mt-1 font-mono">
-                              {formatCurrency(comisionMensual)}
-                            </p>
-                          </div>
+                        <td className="num muted">{plan.num_beneficiaries}</td>
+                        <td className="num">{fmtGs(plan.monthly_premium || 0)}</td>
+                        <td className="num">
+                          <span style={{ color: 'var(--accent)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>{plan.commission_pct}%</span>
                         </td>
-                        <td className="p-4 text-sm">
-                          {plan.start_date && plan.end_date ? (
-                            <div>
-                              <p>{formatDate(plan.start_date)}</p>
-                              <p className="text-gray-400">{formatDate(plan.end_date)}</p>
-                            </div>
-                          ) : (
-                            <span className="text-gray-400">Sin definir</span>
-                          )}
+                        <td className="num" style={{ color: 'var(--success)' }}>{fmtGs(comMensual)}</td>
+                        <td className="muted" style={{ fontSize: 12 }}>
+                          {plan.start_date && plan.end_date
+                            ? `${formatDate(plan.start_date)} → ${formatDate(plan.end_date)}`
+                            : plan.end_date ? formatDate(plan.end_date) : '—'}
+                          {urg === 'urgent' && <span style={{ marginLeft: 6, color: 'var(--error)', fontSize: 11 }}>· Urgente</span>}
+                          {urg === 'warning' && <span style={{ marginLeft: 6, color: 'var(--warning)', fontSize: 11 }}>· Por vencer</span>}
                         </td>
-                        <td className="p-4 text-center">
-                          <span className={`px-3 py-1 rounded-full text-xs font-medium ${statusColors[plan.status]}`}>
-                            {plan.status.toUpperCase()}
-                          </span>
-                        </td>
-                        <td className="p-4 text-center">
-                          <button className="text-error hover:text-error/80 transition-colors">
-                            <Trash2 size={18} />
-                          </button>
-                        </td>
+                        <td><Badge variant={statusInfo.variant} dot>{statusInfo.label}</Badge></td>
                       </tr>
                     )
                   })}
                 </tbody>
               </table>
-            </div>
-          )}
-        </div>
-
-        {showModal && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-card border border-border rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-              <div className="flex items-center justify-between p-6 border-b border-border">
-                <h2 className="text-2xl font-bold">Asignar Plan</h2>
-                <button
-                  onClick={() => setShowModal(false)}
-                  className="text-gray-400 hover:text-white transition-colors"
-                >
-                  <X size={24} />
-                </button>
+            )}
+            {!loading && filtered.length > 0 && (
+              <div className="tbl-foot">
+                <span>{filtered.length} planes</span>
+                <span>Prima total: {fmtGs(filtered.reduce((a, p) => a + (p.monthly_premium || 0), 0))}</span>
               </div>
+            )}
+          </div>
+        </div>
+      </div>
 
-              <form onSubmit={handleSubmit} className="p-6 space-y-6">
-                <div>
-                  <label className="block text-sm font-medium mb-2">Cliente</label>
-                  <select
-                    required
-                    value={formData.client_id}
-                    onChange={(e) => setFormData({ ...formData, client_id: e.target.value })}
-                    className="w-full bg-background border border-border rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-accent"
-                  >
-                    <option value="">Seleccionar cliente</option>
-                    {clients.map(client => (
-                      <option key={client.id} value={client.id}>
-                        {client.first_name} {client.last_name} - {client.email}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium mb-2">Plan</label>
-                  <select
-                    required
-                    value={formData.plan_catalog_id}
-                    onChange={(e) => handlePlanSelect(e.target.value)}
-                    className="w-full bg-background border border-border rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-accent"
-                  >
-                    <option value="">Seleccionar plan</option>
-                    {catalogPlans.map(plan => (
-                      <option key={plan.id} value={plan.id}>
-                        {plan.plan_name} - {formatCurrency(plan.monthly_premium)}/mes
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium mb-2">Beneficiarios</label>
-                    <input
-                      type="number"
-                      required
-                      min="1"
-                      value={formData.num_beneficiaries}
-                      onChange={(e) => setFormData({ ...formData, num_beneficiaries: parseInt(e.target.value) })}
-                      className="w-full bg-background border border-border rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-accent"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium mb-2">Prima Mensual</label>
-                    <input
-                      type="number"
-                      required
-                      min="0"
-                      step="0.01"
-                      value={formData.monthly_premium}
-                      onChange={(e) => setFormData({ ...formData, monthly_premium: parseFloat(e.target.value) })}
-                      className="w-full bg-background border border-border rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-accent"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium mb-2">Comisión (%)</label>
-                    <input
-                      type="number"
-                      required
-                      min="0"
-                      max="100"
-                      step="0.01"
-                      value={formData.commission_pct}
-                      onChange={(e) => setFormData({ ...formData, commission_pct: parseFloat(e.target.value) })}
-                      className="w-full bg-background border border-border rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-accent"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium mb-2">Estado</label>
-                    <select
-                      value={formData.status}
-                      onChange={(e) => setFormData({ ...formData, status: e.target.value as 'cotizado' | 'activo' })}
-                      className="w-full bg-background border border-border rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-accent"
-                    >
-                      <option value="cotizado">Cotizado</option>
-                      <option value="activo">Activo</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium mb-2">Fecha Inicio</label>
-                    <input
-                      type="date"
-                      value={formData.start_date}
-                      onChange={(e) => setFormData({ ...formData, start_date: e.target.value })}
-                      className="w-full bg-background border border-border rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-accent"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium mb-2">Fecha Fin</label>
-                    <input
-                      type="date"
-                      value={formData.end_date}
-                      onChange={(e) => setFormData({ ...formData, end_date: e.target.value })}
-                      className="w-full bg-background border border-border rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-accent"
-                    />
-                  </div>
-                </div>
-
-                <div className="flex gap-3 pt-4">
-                  <button
-                    type="button"
-                    onClick={() => setShowModal(false)}
-                    className="flex-1 px-6 py-3 border border-border rounded-lg font-medium hover:bg-border transition-colors"
-                  >
-                    Cancelar
-                  </button>
-                  <button
-                    type="submit"
-                    className="flex-1 px-6 py-3 bg-accent text-white rounded-lg font-medium hover:bg-accent/90 transition-colors"
-                  >
-                    Asignar Plan
-                  </button>
-                </div>
-              </form>
+      <Modal
+        open={showModal}
+        onClose={() => setShowModal(false)}
+        title="Asignar plan"
+        subtitle="Asociá un plan de EBSA a un cliente"
+        footer={
+          <div className="hstack" style={{ marginLeft: 'auto' }}>
+            <button className="btn" onClick={() => setShowModal(false)}>Cancelar</button>
+            <button className="btn btn-primary" onClick={e => handleSave(e as any)} disabled={saving}>
+              {saving ? 'Guardando...' : 'Asignar plan'}
+            </button>
+          </div>
+        }
+      >
+        <form onSubmit={handleSave}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div>
+              <label className="label">Cliente</label>
+              <select className="select" value={form.client_id} onChange={e => setForm(p => ({ ...p, client_id: e.target.value }))} required>
+                <option value="">Seleccionar cliente...</option>
+                {clients.map(c => <option key={c.id} value={c.id}>{c.full_name || `${c.first_name} ${c.last_name}`}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="label">Plan EBSA</label>
+              <select className="select" value={form.plan_catalog_id} onChange={e => {
+                const p = catalog.find(x => x.id === e.target.value)
+                setForm(prev => ({ ...prev, plan_catalog_id: e.target.value, monthly_premium: p?.monthly_premium ?? 0 }))
+              }} required>
+                <option value="">Seleccionar plan...</option>
+                {catalog.map(p => <option key={p.id} value={p.id}>{p.plan_name} — {fmtGs(p.monthly_premium)}/mes</option>)}
+              </select>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <div>
+                <label className="label">Nº beneficiarios</label>
+                <input className="input" type="number" min={1} value={form.num_beneficiaries} onChange={e => setForm(p => ({ ...p, num_beneficiaries: +e.target.value }))} />
+              </div>
+              <div>
+                <label className="label">Prima mensual (Gs.)</label>
+                <input className="input" type="number" value={form.monthly_premium} onChange={e => setForm(p => ({ ...p, monthly_premium: +e.target.value }))} />
+              </div>
+              <div>
+                <label className="label">Comisión %</label>
+                <input className="input" type="number" min={0} max={100} value={form.commission_pct} onChange={e => setForm(p => ({ ...p, commission_pct: +e.target.value }))} />
+              </div>
+              <div>
+                <label className="label">Estado</label>
+                <select className="select" value={form.status} onChange={e => setForm(p => ({ ...p, status: e.target.value }))}>
+                  <option value="cotizado">Cotizado</option>
+                  <option value="activo">Activo</option>
+                </select>
+              </div>
+              <div>
+                <label className="label">Inicio vigencia</label>
+                <input className="input" type="date" value={form.start_date} onChange={e => setForm(p => ({ ...p, start_date: e.target.value }))} />
+              </div>
+              <div>
+                <label className="label">Fin vigencia</label>
+                <input className="input" type="date" value={form.end_date} onChange={e => setForm(p => ({ ...p, end_date: e.target.value }))} />
+              </div>
             </div>
           </div>
-        )}
-      </main>
-    </div>
+        </form>
+      </Modal>
+    </AppShell>
   )
 }

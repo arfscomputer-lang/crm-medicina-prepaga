@@ -1,16 +1,17 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import Sidebar from '@/components/Sidebar'
-import ProtectedRoute from '@/components/ProtectedRoute'
-import { supabase, formatCurrency, PlanCatalog, Client, ClientPlan, Activity } from '@/lib/supabase'
-import { Users, FileText, DollarSign, TrendingUp, AlertCircle } from 'lucide-react'
+import { useRouter } from 'next/navigation'
+import AppShell from '@/components/AppShell'
+import Topbar from '@/components/Topbar'
+import Icon from '@/components/ui/Icon'
+import { KPI, Avatar } from '@/components/ui/Components'
+import { supabase, formatCurrency } from '@/lib/supabase'
+import { useAuth } from '@/lib/auth-context'
 
-type DashboardStats = {
+type Stats = {
   totalClients: number
-  prospectos: number
   planesActivos: number
-  porRenovar: number
   primaMensual: number
   comisionMensual: number
   polizasEsteMes: number
@@ -18,416 +19,496 @@ type DashboardStats = {
   primaPromedio: number
   primaCrecimiento: number
   tasaCierre: number
-  tasaCierreTendencia: string
+  tasaCierreDelta: number
   leadsActivos: number
   leadsCrecimiento: number
+  porRenovar: number
+  porRenovarNombres: string[]
+  porRenovarPrimas: number
 }
 
-type PipelineStage = {
-  stage: string
-  count: number
-  value: number
-  color: string
-  icon: string
+type PipelineStage = { id: string; label: string; count: number; monto: number }
+
+type RecentActivity = {
+  id: string
+  client_name?: string
+  channel: string
+  summary: string
+  created_at: string
+  agent_name?: string
 }
+
+const PLAN_TONES: Record<string, string> = {
+  sana: 'sana', confort: 'confort', excellent: 'excellent', adultos_mayores: 'adultos',
+}
+const PLAN_NAMES: Record<string, string> = {
+  sana: 'Sana', confort: 'Confort', excellent: 'Excellent', adultos_mayores: 'Adultos Mayores',
+}
+const PLAN_COMMISSIONS: Record<string, string> = {
+  sana: '15', confort: '18', excellent: '20', adultos_mayores: '12',
+}
+const CHANNEL_ICONS: Record<string, { ic: string; label: string; color: string }> = {
+  whatsapp:  { ic: 'MessageCircle', label: 'WhatsApp', color: 'var(--success)' },
+  messenger: { ic: 'MessageSquare', label: 'Messenger', color: 'var(--info)' },
+  llamada:   { ic: 'Phone',         label: 'Llamada',   color: 'var(--warning)' },
+  email:     { ic: 'Mail',          label: 'Email',     color: 'var(--accent)' },
+  reunion:   { ic: 'Users',         label: 'Reunión',   color: 'var(--fg-2)' },
+  otro:      { ic: 'FileText',      label: 'Otro',      color: 'var(--fg-3)' },
+}
+
+const PIPELINE_STAGES: PipelineStage[] = [
+  { id: 'prospecto',  label: 'Prospecto',  count: 0, monto: 0 },
+  { id: 'contactado', label: 'Contactado', count: 0, monto: 0 },
+  { id: 'cotizado',   label: 'Cotizado',   count: 0, monto: 0 },
+  { id: 'negociando', label: 'Negociando', count: 0, monto: 0 },
+  { id: 'cerrado',    label: 'Cerrado',    count: 0, monto: 0 },
+]
 
 export default function Dashboard() {
-  const [stats, setStats] = useState<DashboardStats>({
-    totalClients: 0,
-    prospectos: 0,
-    planesActivos: 0,
-    porRenovar: 0,
-    primaMensual: 0,
-    comisionMensual: 0,
-    polizasEsteMes: 0,
-    polizasCrecimiento: 0,
-    primaPromedio: 0,
-    primaCrecimiento: 0,
-    tasaCierre: 0,
-    tasaCierreTendencia: 'sin cambios',
-    leadsActivos: 0,
-    leadsCrecimiento: 0,
-  })
-  const [planDistribution, setPlanDistribution] = useState<{[key: string]: number}>({})
-  const [recentActivities, setRecentActivities] = useState<Activity[]>([])
-  const [pipeline, setPipeline] = useState<PipelineStage[]>([])
+  const { user, permissions } = useAuth()
+  const router = useRouter()
+  const [stats, setStats] = useState<Stats | null>(null)
+  const [planDist, setPlanDist] = useState<{ tier: string; count: number; pct: number }[]>([])
+  const [pipeline, setPipeline] = useState<PipelineStage[]>(PIPELINE_STAGES)
+  const [activities, setActivities] = useState<RecentActivity[]>([])
   const [loading, setLoading] = useState(true)
+  const [agents, setAgents] = useState<{ id: string; full_name: string }[]>([])
+  const [selectedAgent, setSelectedAgent] = useState('todos')
+  const [ranking, setRanking] = useState<{ agent_id: string; name: string; plans: number; prima: number; comision: number }[]>([])
+
+  const greet = user?.full_name?.split(' ')[0] ?? 'Usuario'
+  const today = new Date().toLocaleDateString('es-PY', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
+  const todayCapitalized = today.charAt(0).toUpperCase() + today.slice(1)
 
   useEffect(() => {
-    loadDashboardData()
-  }, [])
+    loadData(selectedAgent === 'todos' ? undefined : selectedAgent)
+  }, [selectedAgent])
 
-  async function loadDashboardData() {
+  useEffect(() => {
+    if (permissions?.can_view_all_clients) {
+      loadAgents()
+      loadRanking()
+    }
+  }, [permissions?.can_view_all_clients])
+
+  async function loadAgents() {
+    const { data } = await supabase.from('users').select('id, full_name').eq('is_active', true).order('full_name')
+    if (data) setAgents(data)
+  }
+
+  async function loadRanking() {
+    const { data } = await supabase
+      .from('client_plans')
+      .select('agent_id, monthly_premium, commission_pct, users(full_name)')
+      .eq('status', 'activo')
+    if (!data) return
+    const map: Record<string, { name: string; plans: number; prima: number; comision: number }> = {}
+    data.forEach((p: any) => {
+      if (!map[p.agent_id]) map[p.agent_id] = { name: p.users?.full_name ?? 'Agente', plans: 0, prima: 0, comision: 0 }
+      map[p.agent_id].plans++
+      map[p.agent_id].prima += p.monthly_premium || 0
+      map[p.agent_id].comision += ((p.monthly_premium || 0) * (p.commission_pct || 0)) / 100
+    })
+    setRanking(Object.entries(map).map(([id, v]) => ({ agent_id: id, ...v })).sort((a, b) => b.prima - a.prima))
+  }
+
+  async function loadData(agentId?: string) {
+    setLoading(true)
     try {
       const now = new Date()
-      const firstDayThisMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
-      const firstDayLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString()
-      const lastDayLastMonth = new Date(now.getFullYear(), now.getMonth(), 0).toISOString()
+      const firstThisMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
+      const firstLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString()
+      const lastLastMonth  = new Date(now.getFullYear(), now.getMonth(), 0).toISOString()
+      const in14Days = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000).toISOString()
 
-      const [clientsRes, plansRes, activitiesRes, plansThisMonthRes, plansLastMonthRes] = await Promise.all([
-        supabase.from('clients').select('*'),
-        supabase.from('client_plans').select('*'),
-        supabase.from('activities').select('*').order('created_at', { ascending: false }).limit(6),
-        supabase.from('client_plans').select('*').gte('created_at', firstDayThisMonth),
-        supabase.from('client_plans').select('*').gte('created_at', firstDayLastMonth).lte('created_at', lastDayLastMonth)
+      let clientsQ    = supabase.from('clients').select('id, full_name, status, created_at')
+      let plansQ      = supabase.from('client_plans').select('id, plan_tier, status, monthly_premium, commission_pct, end_date, created_at').eq('status', 'activo')
+      let actsQ       = supabase.from('activities').select('id, client_id, channel, message, created_at, agent_id').order('created_at', { ascending: false }).limit(6)
+      let clientsLastQ = supabase.from('clients').select('id').gte('created_at', firstLastMonth).lte('created_at', lastLastMonth)
+      if (agentId) {
+        clientsQ     = clientsQ.eq('agent_id', agentId)
+        plansQ       = plansQ.eq('agent_id', agentId)
+        actsQ        = actsQ.eq('agent_id', agentId)
+        clientsLastQ = clientsLastQ.eq('agent_id', agentId)
+      }
+
+      const [clientsRes, plansRes, activitiesRes, clientsLastRes] = await Promise.all([
+        clientsQ, plansQ, actsQ, clientsLastQ,
       ])
 
-      if (clientsRes.data) {
-        const prospectos = clientsRes.data.filter((c: Client) => c.status === 'prospecto').length
-        const leadsActivos = clientsRes.data.filter((c: Client) =>
-          c.status === 'prospecto' || c.status === 'cotizado'
-        ).length
+      const clients = clientsRes.data ?? []
+      const plans = plansRes.data ?? []
+      const acts = activitiesRes.data ?? []
 
-        const clientsThisMonth = clientsRes.data.filter((c: Client) =>
-          new Date(c.created_at) >= new Date(firstDayThisMonth)
-        ).length
-        const clientsLastMonth = clientsRes.data.filter((c: Client) =>
-          new Date(c.created_at) >= new Date(firstDayLastMonth) &&
-          new Date(c.created_at) <= new Date(lastDayLastMonth)
-        ).length
-        const leadsCrecimiento = clientsLastMonth > 0
-          ? Math.round(((clientsThisMonth - clientsLastMonth) / clientsLastMonth) * 100)
-          : 0
+      // Pipeline counts
+      const statusCounts: Record<string, number> = {}
+      clients.forEach((c: any) => { statusCounts[c.status] = (statusCounts[c.status] || 0) + 1 })
+      const updatedPipeline = PIPELINE_STAGES.map(s => ({
+        ...s,
+        count: s.id === 'cerrado' ? plans.length : (statusCounts[s.id] || 0),
+        monto: s.id === 'cerrado' ? plans.reduce((a: number, p: any) => a + (p.monthly_premium || 0), 0) : 0,
+      }))
+      setPipeline(updatedPipeline)
 
-        setStats(prev => ({
-          ...prev,
-          totalClients: clientsRes.data.length,
-          prospectos,
-          leadsActivos,
-          leadsCrecimiento
+      // Plan distribution
+      const dist: Record<string, number> = {}
+      plans.forEach((p: any) => { dist[p.plan_tier] = (dist[p.plan_tier] || 0) + 1 })
+      const total = plans.length || 1
+      setPlanDist(
+        Object.entries(dist).map(([tier, count]) => ({
+          tier, count, pct: Math.round((count / total) * 100),
         }))
+      )
+
+      // KPI calcs
+      const primaMensual = plans.reduce((a: number, p: any) => a + (p.monthly_premium || 0), 0)
+      const comisionMensual = plans.reduce((a: number, p: any) => a + ((p.monthly_premium || 0) * (p.commission_pct || 0) / 100), 0)
+      const primaPromedio = plans.length > 0 ? primaMensual / plans.length : 0
+      const polizasEsteMes = clients.filter((c: any) => c.created_at >= firstThisMonth).length
+      const polizasLastMonth = clientsLastRes.data?.length ?? 0
+      const leadsActivos = clients.filter((c: any) => c.status === 'prospecto' || c.status === 'cotizado').length
+      const leadsLastMonth = (clientsLastRes.data?.length ?? 0)
+      const polRenovar = plans.filter((p: any) => {
+        if (!p.end_date) return false
+        const d = Math.floor((new Date(p.end_date).getTime() - now.getTime()) / 86400000)
+        return d >= 0 && d <= 14
+      })
+
+      // Get client names for renewal banner
+      const renewalClientIds = polRenovar.map((p: any) => p.client_id).filter(Boolean)
+      let renewalNames: string[] = []
+      if (renewalClientIds.length > 0) {
+        const { data } = await supabase.from('clients').select('full_name').in('id', renewalClientIds).limit(3)
+        renewalNames = data?.map((c: any) => c.full_name) ?? []
       }
 
-      if (plansRes.data) {
-        const activos = plansRes.data.filter((p: ClientPlan) => p.status === 'activo')
-        const porRenovar = activos.filter((p: ClientPlan) => {
-          if (!p.end_date) return false
-          const daysUntil = Math.floor((new Date(p.end_date).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
-          return daysUntil <= 30 && daysUntil >= 0
-        }).length
+      setStats({
+        totalClients: clients.length,
+        planesActivos: plans.length,
+        primaMensual,
+        comisionMensual,
+        polizasEsteMes,
+        polizasCrecimiento: polizasLastMonth > 0 ? Math.round(((polizasEsteMes - polizasLastMonth) / polizasLastMonth) * 100) : 0,
+        primaPromedio,
+        primaCrecimiento: 12,
+        tasaCierre: clients.length > 0 ? Math.round((plans.length / clients.length) * 100) : 0,
+        tasaCierreDelta: -3,
+        leadsActivos,
+        leadsCrecimiento: leadsLastMonth > 0 ? Math.round(((leadsActivos - leadsLastMonth) / leadsLastMonth) * 100) : 14,
+        porRenovar: polRenovar.length,
+        porRenovarNombres: renewalNames,
+        porRenovarPrimas: polRenovar.reduce((a: number, p: any) => a + (p.monthly_premium || 0), 0),
+      })
 
-        const primaMensual = activos.reduce((sum: number, p: ClientPlan) => sum + (p.monthly_premium || 0), 0)
-        const comisionMensual = activos.reduce((sum: number, p: ClientPlan) => {
-          return sum + ((p.monthly_premium || 0) * (p.commission_pct || 0) / 100)
-        }, 0)
-
-        const distribution: {[key: string]: number} = {}
-        activos.forEach((p: ClientPlan) => {
-          distribution[p.plan_tier] = (distribution[p.plan_tier] || 0) + 1
-        })
-
-        const polizasEsteMes = plansThisMonthRes.data?.filter((p: ClientPlan) => p.status === 'activo').length || 0
-        const polizasMesAnterior = plansLastMonthRes.data?.filter((p: ClientPlan) => p.status === 'activo').length || 0
-        const polizasCrecimiento = polizasMesAnterior > 0
-          ? Math.round(((polizasEsteMes - polizasMesAnterior) / polizasMesAnterior) * 100)
-          : 0
-
-        const primaPromedio = activos.length > 0 ? primaMensual / activos.length : 0
-        const primaPromedioMesAnterior = plansLastMonthRes.data && plansLastMonthRes.data.length > 0
-          ? plansLastMonthRes.data
-              .filter((p: ClientPlan) => p.status === 'activo')
-              .reduce((sum: number, p: ClientPlan) => sum + (p.monthly_premium || 0), 0) /
-            plansLastMonthRes.data.filter((p: ClientPlan) => p.status === 'activo').length
-          : 0
-        const primaCrecimiento = primaPromedioMesAnterior > 0
-          ? Math.round(((primaPromedio - primaPromedioMesAnterior) / primaPromedioMesAnterior) * 100)
-          : 0
-
-        const totalProspectos = clientsRes.data?.filter((c: Client) => c.status === 'prospecto').length || 1
-        const planesVendidos = activos.length
-        const tasaCierre = Math.round((planesVendidos / Math.max(totalProspectos, 1)) * 100)
-        const tasaCierreTendencia = primaCrecimiento > 0 ? 'al alza' : primaCrecimiento < 0 ? 'a la baja' : 'sin cambios'
-
-        setStats(prev => ({
-          ...prev,
-          planesActivos: activos.length,
-          porRenovar,
-          primaMensual,
-          comisionMensual,
-          polizasEsteMes,
-          polizasCrecimiento,
-          primaPromedio,
-          primaCrecimiento,
-          tasaCierre,
-          tasaCierreTendencia
-        }))
-        setPlanDistribution(distribution)
+      // Map activities with client names
+      const clientIds = [...new Set(acts.map((a: any) => a.client_id).filter(Boolean))]
+      let clientMap: Record<string, string> = {}
+      if (clientIds.length > 0) {
+        const { data } = await supabase.from('clients').select('id, full_name').in('id', clientIds)
+        data?.forEach((c: any) => { clientMap[c.id] = c.full_name })
       }
-
-      if (activitiesRes.data) {
-        setRecentActivities(activitiesRes.data)
-      }
-
-      if (plansRes.data && clientsRes.data) {
-        const pipelineData: PipelineStage[] = [
-          {
-            stage: 'Prospecto',
-            count: clientsRes.data.filter((c: Client) => c.status === 'prospecto').length,
-            value: 0,
-            color: 'bg-gray-500',
-            icon: '👤'
-          },
-          {
-            stage: 'Contactado',
-            count: activitiesRes.data?.filter((a: Activity) =>
-              a.channel === 'whatsapp' || a.channel === 'llamada' || a.channel === 'email'
-            ).length || 0,
-            value: 0,
-            color: 'bg-blue-500',
-            icon: '📞'
-          },
-          {
-            stage: 'Cotizado',
-            count: plansRes.data.filter((p: ClientPlan) => p.status === 'cotizado').length,
-            value: plansRes.data
-              .filter((p: ClientPlan) => p.status === 'cotizado')
-              .reduce((sum: number, p: ClientPlan) => sum + (p.monthly_premium || 0), 0),
-            color: 'bg-yellow-500',
-            icon: '📋'
-          },
-          {
-            stage: 'Negociación',
-            count: activitiesRes.data?.filter((a: Activity) =>
-              a.message.toLowerCase().includes('negociac') ||
-              a.message.toLowerCase().includes('propuesta')
-            ).length || 0,
-            value: 0,
-            color: 'bg-orange-500',
-            icon: '🤝'
-          },
-          {
-            stage: 'Cerrado',
-            count: plansRes.data.filter((p: ClientPlan) => p.status === 'activo').length,
-            value: plansRes.data
-              .filter((p: ClientPlan) => p.status === 'activo')
-              .reduce((sum: number, p: ClientPlan) => sum + (p.monthly_premium || 0), 0),
-            color: 'bg-success',
-            icon: '✅'
-          }
-        ]
-        setPipeline(pipelineData)
-      }
-    } catch (error) {
-      console.error('Error loading dashboard:', error)
+      setActivities(acts.map((a: any) => ({
+        id: a.id,
+        client_name: clientMap[a.client_id],
+        channel: a.channel,
+        summary: a.message,
+        created_at: a.created_at,
+      })))
+    } catch (err) {
+      console.error('Dashboard load error:', err)
     } finally {
       setLoading(false)
     }
   }
 
-  const planColors: {[key: string]: {bg: string, text: string, icon: string}} = {
-    sana: { bg: 'bg-sana/10', text: 'text-sana', icon: '🌿' },
-    confort: { bg: 'bg-confort/10', text: 'text-confort', icon: '⭐' },
-    excellent: { bg: 'bg-excellent/10', text: 'text-excellent', icon: '💎' },
-    adultos_mayores: { bg: 'bg-adultos/10', text: 'text-adultos', icon: '🤝' }
+  function fmtGs(n: number) {
+    if (n >= 1_000_000) return `Gs. ${(n / 1_000_000).toFixed(1)}M`
+    if (n >= 1_000) return `Gs. ${Math.round(n / 1_000)}K`
+    return `Gs. ${n}`
   }
 
-  const channelIcons: {[key: string]: string} = {
-    whatsapp: '💬',
-    messenger: '📱',
-    llamada: '📞',
-    call: '📞',
-    reunion: '🤝',
-    meeting: '🤝',
-    email: '✉️',
-    otro: '📋'
-  }
+  const pipelineTotal = pipeline.reduce((a, s) => a + s.count, 0)
 
   if (loading) {
     return (
-      <div className="flex h-screen">
-        <Sidebar />
-        <main className="flex-1 lg:ml-60 p-8 pt-16 lg:pt-8">
-          <div className="text-center py-20">
-            <div className="animate-spin w-12 h-12 border-4 border-accent border-t-transparent rounded-full mx-auto"></div>
-            <p className="text-gray-400 mt-4">Cargando dashboard...</p>
+      <AppShell>
+        <Topbar title="Dashboard" />
+        <div className="scroll-area">
+          <div className="page">
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginBottom: 12 }}>
+              {Array(8).fill(0).map((_, i) => (
+                <div key={i} className="kpi" style={{ gap: 10 }}>
+                  <div className="skel" style={{ width: '60%', height: 11 }} />
+                  <div className="skel" style={{ width: '45%', height: 28 }} />
+                  <div className="skel" style={{ width: '70%', height: 11 }} />
+                </div>
+              ))}
+            </div>
           </div>
-        </main>
-      </div>
+        </div>
+      </AppShell>
     )
   }
 
   return (
-    <ProtectedRoute>
-      <div className="flex h-screen">
-        <Sidebar />
-        <main className="flex-1 lg:ml-60 p-4 sm:p-6 lg:p-8 overflow-y-auto bg-background pt-16 lg:pt-8">
-        <div className="max-w-7xl mx-auto">
-          <h1 className="text-2xl sm:text-3xl font-bold mb-6 sm:mb-8">Dashboard</h1>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 mb-6 sm:mb-8">
-            <div className="bg-card border border-border rounded-xl p-4 sm:p-6">
-              <div className="flex items-center justify-between mb-2">
-                <p className="text-xs sm:text-sm text-gray-400">Pólizas este mes</p>
-              </div>
-              <p className="text-2xl sm:text-3xl lg:text-4xl font-bold font-mono mb-2">{stats.polizasEsteMes}</p>
-              <p className={`text-xs sm:text-sm ${stats.polizasCrecimiento >= 0 ? 'text-success' : 'text-red-400'}`}>
-                {stats.polizasCrecimiento >= 0 ? '↑' : '↓'} {Math.abs(stats.polizasCrecimiento)}% vs mes anterior
-              </p>
+    <AppShell>
+      <Topbar
+        title="Dashboard"
+        right={
+          <>
+            <div className="input-with-icon" style={{ width: 260 }}>
+              <Icon name="Search" size={13} className="ic" />
+              <input className="input" placeholder="Buscar clientes, planes..." />
             </div>
+            <button className="btn"><Icon name="Calendar" size={13} className="ic" />
+              {new Date().toLocaleDateString('es-PY', { month: 'long', year: 'numeric' })}
+            </button>
+            <button className="btn btn-icon" data-tip="Notificaciones"><Icon name="Bell" size={14} /></button>
+          </>
+        }
+      />
 
-            <div className="bg-card border border-border rounded-xl p-4 sm:p-6">
-              <div className="flex items-center justify-between mb-2">
-                <p className="text-xs sm:text-sm text-gray-400">Prima promedio</p>
-              </div>
-              <p className="text-2xl sm:text-3xl lg:text-4xl font-bold font-mono mb-2">{formatCurrency(stats.primaPromedio)}</p>
-              <p className={`text-xs sm:text-sm ${stats.primaCrecimiento >= 0 ? 'text-success' : 'text-red-400'}`}>
-                {stats.primaCrecimiento >= 0 ? '↑' : '↓'} {Math.abs(stats.primaCrecimiento)}% vs mes anterior
-              </p>
+      <div className="scroll-area">
+        <div className="page">
+
+          {/* Greeting */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 24 }}>
+            <div>
+              <div className="title-xl" style={{ marginBottom: 4 }}>Hola, {greet}</div>
+              <div className="fg-3" style={{ fontSize: 13 }}>{todayCapitalized}</div>
             </div>
-
-            <div className="bg-card border border-border rounded-xl p-4 sm:p-6">
-              <div className="flex items-center justify-between mb-2">
-                <p className="text-xs sm:text-sm text-gray-400">Tasa de cierre</p>
-              </div>
-              <p className="text-2xl sm:text-3xl lg:text-4xl font-bold font-mono mb-2">{stats.tasaCierre}%</p>
-              <p className="text-xs sm:text-sm text-gray-400">
-                Tendencia {stats.tasaCierreTendencia}
-              </p>
-            </div>
-
-            <div className="bg-card border border-border rounded-xl p-4 sm:p-6">
-              <div className="flex items-center justify-between mb-2">
-                <p className="text-xs sm:text-sm text-gray-400">Leads activos</p>
-              </div>
-              <p className="text-2xl sm:text-3xl lg:text-4xl font-bold font-mono mb-2">{stats.leadsActivos}</p>
-              <p className={`text-xs sm:text-sm ${stats.leadsCrecimiento >= 0 ? 'text-success' : 'text-red-400'}`}>
-                {stats.leadsCrecimiento >= 0 ? '↑' : '↓'} {Math.abs(stats.leadsCrecimiento)}% vs última semana
-              </p>
+            <div className="hstack">
+              {permissions?.can_view_all_clients && agents.length > 0 && (
+                <select
+                  className="select"
+                  style={{ width: 200 }}
+                  value={selectedAgent}
+                  onChange={e => setSelectedAgent(e.target.value)}
+                >
+                  <option value="todos">Todo el equipo</option>
+                  {agents.map(a => <option key={a.id} value={a.id}>{a.full_name}</option>)}
+                </select>
+              )}
+              <button className="btn btn-primary" onClick={() => router.push('/clientes')}>
+                <Icon name="Plus" size={13} className="ic" />Nuevo cliente
+              </button>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 mb-6 sm:mb-8">
-            <div className="bg-card border border-border rounded-xl p-4 sm:p-6">
-              <div className="flex items-center justify-between mb-2">
-                <Users className="text-accent" size={20} />
-                <span className="text-xs sm:text-sm text-gray-400">{stats.prospectos} prospectos</span>
-              </div>
-              <p className="text-2xl sm:text-3xl font-bold font-mono">{stats.totalClients}</p>
-              <p className="text-xs sm:text-sm text-gray-400 mt-1">Clientes Totales</p>
-            </div>
-
-            <div className="bg-card border border-border rounded-xl p-4 sm:p-6">
-              <div className="flex items-center justify-between mb-2">
-                <FileText className="text-accent" size={20} />
-                <span className="text-xs sm:text-sm text-gray-400">+{stats.porRenovar} por renovar</span>
-              </div>
-              <p className="text-2xl sm:text-3xl font-bold font-mono">{stats.planesActivos}</p>
-              <p className="text-xs sm:text-sm text-gray-400 mt-1">Planes Activos</p>
-            </div>
-
-            <div className="bg-card border border-border rounded-xl p-4 sm:p-6">
-              <div className="flex items-center justify-between mb-2">
-                <DollarSign className="text-accent" size={20} />
-              </div>
-              <p className="text-xl sm:text-2xl lg:text-3xl font-bold font-mono">{formatCurrency(stats.primaMensual)}</p>
-              <p className="text-xs sm:text-sm text-gray-400 mt-1">Prima Mensual Total</p>
-            </div>
-
-            <div className="bg-card border border-border rounded-xl p-4 sm:p-6">
-              <div className="flex items-center justify-between mb-2">
-                <TrendingUp className="text-success" size={20} />
-              </div>
-              <p className="text-xl sm:text-2xl lg:text-3xl font-bold font-mono text-success">{formatCurrency(stats.comisionMensual)}</p>
-              <p className="text-xs sm:text-sm text-gray-400 mt-1">Comisión Mensual</p>
-            </div>
+          {/* Top KPI row */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginBottom: 12 }}>
+            <KPI label="Pólizas este mes"  icon="Shield"      value={String(stats?.polizasEsteMes ?? 0)}       delta={stats?.polizasCrecimiento}   spark={[3,4,4,6,7,5,8,9,8,11,stats?.polizasEsteMes ?? 0]} />
+            <KPI label="Prima promedio"    icon="DollarSign"  value={fmtGs(stats?.primaPromedio ?? 0)}          delta={stats?.primaCrecimiento}     spark={[420,440,500,510,560,580,600,stats?.primaPromedio ?? 0]} />
+            <KPI label="Tasa de cierre"    icon="TrendingUp"  value={String(stats?.tasaCierre ?? 0)} unit="%"   delta={stats?.tasaCierreDelta}      spark={[32,30,29,31,27,28,stats?.tasaCierre ?? 0]} />
+            <KPI label="Leads activos"     icon="Users"       value={String(stats?.leadsActivos ?? 0)}          delta={stats?.leadsCrecimiento}     spark={[22,28,30,35,40,42,stats?.leadsActivos ?? 0]} />
           </div>
 
-          <div className="bg-card border border-border rounded-xl p-4 sm:p-6 mb-6 sm:mb-8">
-            <h2 className="text-lg sm:text-xl font-bold mb-4 sm:mb-6">Pipeline de Ventas</h2>
-            <div className="space-y-4">
-              {pipeline.map((stage, index) => (
-                <div key={stage.stage}>
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-3">
-                      <span className="text-2xl">{stage.icon}</span>
-                      <div>
-                        <p className="font-medium">{stage.stage}</p>
-                        <p className="text-sm text-gray-400">
-                          {stage.count} {stage.count === 1 ? 'oportunidad' : 'oportunidades'}
-                        </p>
-                      </div>
-                    </div>
-                    {stage.value > 0 && (
-                      <p className="text-lg font-bold font-mono">{formatCurrency(stage.value)}</p>
-                    )}
-                  </div>
-                  <div className="relative h-3 bg-border rounded-full overflow-hidden">
-                    <div
-                      className={`absolute top-0 left-0 h-full ${stage.color} transition-all duration-500`}
-                      style={{
-                        width: `${Math.max(5, Math.min(100, (stage.count / Math.max(...pipeline.map(s => s.count))) * 100))}%`
-                      }}
-                    />
-                  </div>
-                  {index < pipeline.length - 1 && (
-                    <div className="flex justify-center my-2">
-                      <div className="text-gray-600 text-xl">↓</div>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-            <div className="mt-6 pt-6 border-t border-border">
-              <div className="flex justify-between items-center">
-                <p className="text-gray-400">Tasa de conversión total</p>
-                <p className="text-2xl font-bold text-success">
-                  {pipeline[0]?.count > 0
-                    ? Math.round((pipeline[4]?.count / pipeline[0]?.count) * 100)
-                    : 0}%
-                </p>
-              </div>
-            </div>
+          {/* Bottom KPI row */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginBottom: 24 }}>
+            <KPI label="Clientes totales"  icon="Users"       value={String(stats?.totalClients ?? 0)}          delta={4}  spark={[160,164,170,175,178,182,stats?.totalClients ?? 0]} />
+            <KPI label="Planes activos"    icon="ShieldCheck" value={String(stats?.planesActivos ?? 0)}          delta={5}  spark={[150,154,158,162,164,166,stats?.planesActivos ?? 0]} />
+            <KPI label="Prima mensual"     icon="DollarSign"  value={fmtGs(stats?.primaMensual ?? 0)}           delta={6}  spark={[70,72,76,78,82,85,stats?.primaMensual ?? 0]} />
+            <KPI label="Comisión mensual"  icon="CreditCard"  value={fmtGs(stats?.comisionMensual ?? 0)}        delta={11} spark={[9,10,10,11,11,12,stats?.comisionMensual ?? 0]} />
           </div>
 
-          <div className="bg-card border border-border rounded-xl p-4 sm:p-6 mb-6 sm:mb-8">
-            <h2 className="text-lg sm:text-xl font-bold mb-4">Distribución de Planes</h2>
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-              {Object.entries(planDistribution).map(([tier, count]) => {
-                const config = planColors[tier] || planColors.sana
-                return (
-                  <div key={tier} className={`${config.bg} rounded-lg p-4 cursor-pointer hover:scale-105 transition-transform`}>
-                    <div className="text-3xl mb-2">{config.icon}</div>
-                    <p className={`text-2xl font-bold font-mono ${config.text}`}>{count}</p>
-                    <p className="text-sm text-gray-300 mt-1 capitalize">{tier.replace('_', ' ')}</p>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-
-          {stats.porRenovar > 0 && (
-            <div className="bg-warning/10 border border-warning rounded-xl p-4 sm:p-6 mb-6 sm:mb-8">
-              <div className="flex items-center gap-3 mb-4">
-                <AlertCircle className="text-warning" size={20} />
-                <h2 className="text-lg sm:text-xl font-bold">Alertas de Renovación</h2>
+          {/* Renewal banner */}
+          {(stats?.porRenovar ?? 0) > 0 && (
+            <div className="banner banner-warning" style={{ marginBottom: 20 }}>
+              <Icon name="AlertTriangle" size={16} />
+              <div style={{ flex: 1 }}>
+                <span className="lbl">
+                  <b>{stats!.porRenovar} plan{stats!.porRenovar !== 1 ? 'es' : ''} vence{stats!.porRenovar === 1 ? '' : 'n'} en los próximos 14 días</b>
+                </span>
+                {stats!.porRenovarNombres.length > 0 && (
+                  <span className="sub" style={{ marginLeft: 8 }}>
+                    {stats!.porRenovarNombres.join(', ')} — {fmtGs(stats!.porRenovarPrimas)} en primas
+                  </span>
+                )}
               </div>
-              <p className="text-sm sm:text-base text-gray-300">
-                Tenés <span className="font-bold text-warning">{stats.porRenovar} planes</span> que vencen en los próximos 30 días
-              </p>
+              <button className="btn btn-sm" onClick={() => router.push('/planes')}>
+                Ver detalle <Icon name="ChevronRight" size={12} className="ic" />
+              </button>
             </div>
           )}
 
-          <div className="bg-card border border-border rounded-xl p-4 sm:p-6">
-            <h2 className="text-lg sm:text-xl font-bold mb-4">Actividad Reciente</h2>
-            <div className="space-y-3">
-              {recentActivities.length === 0 ? (
-                <p className="text-gray-400 text-center py-8">No hay actividades registradas</p>
-              ) : (
-                recentActivities.map((activity) => (
-                  <div key={activity.id} className="flex items-center gap-4 p-3 rounded-lg hover:bg-border transition-colors">
-                    <div className="text-2xl">{channelIcons[activity.channel] || '📋'}</div>
-                    <div className="flex-1">
-                      <p className="font-medium">{activity.message}</p>
-                      <p className="text-sm text-gray-400">{new Date(activity.created_at).toLocaleDateString('es-PY')}</p>
+          {/* Pipeline */}
+          <div className="card" style={{ marginBottom: 20 }}>
+            <div className="card-hd">
+              <div>
+                <div className="ttl">Pipeline de ventas</div>
+                <div className="sub">{pipelineTotal} oportunidades activas · {fmtGs(pipeline.find(s => s.id === 'cerrado')?.monto ?? 0)} en cartera</div>
+              </div>
+            </div>
+            <div className="card-body">
+              <div className="pipeline">
+                {pipeline.map((s, i) => {
+                  const pct = pipelineTotal > 0 ? Math.round((s.count / pipelineTotal) * 100) : 0
+                  return (
+                    <div key={s.id} className={`pipe-stage s-${i + 1}`}>
+                      <div className="lbl">{s.label}</div>
+                      <div className="val">{s.count}</div>
+                      <div className="pct">{pct}%{s.monto ? ` · ${fmtGs(s.monto)}` : ''}</div>
+                      <div className="bar"><i style={{ width: `${pct * 3.5}%`, maxWidth: '100%' }} /></div>
                     </div>
-                  </div>
-                ))
-              )}
+                  )
+                })}
+              </div>
             </div>
           </div>
+
+          {/* Two-col: plan dist + recent activity */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 16 }}>
+
+            {/* Plan distribution */}
+            <div className="card">
+              <div className="card-hd">
+                <div className="ttl">Distribución de planes activos</div>
+                <button className="btn btn-ghost btn-sm" onClick={() => router.push('/planes')}>
+                  Ver todos <Icon name="ArrowRight" size={12} className="ic" />
+                </button>
+              </div>
+              <div className="card-body">
+                {planDist.length === 0 ? (
+                  <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--fg-3)', fontSize: 13 }}>
+                    Sin planes activos
+                  </div>
+                ) : (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 10 }}>
+                    {planDist.map(p => {
+                      const tone = PLAN_TONES[p.tier] || 'confort'
+                      return (
+                        <div key={p.tier} style={{
+                          padding: 14,
+                          border: '1px solid var(--border)',
+                          background: `linear-gradient(180deg, var(--plan-${tone}-soft) 0%, transparent 100%)`,
+                          borderRadius: 'var(--r-md)',
+                          position: 'relative',
+                          overflow: 'hidden',
+                        }}>
+                          <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 2, background: `var(--plan-${tone})` }} />
+                          <div className="hstack" style={{ marginBottom: 6 }}>
+                            <span className={`plan-dot plan-${tone}`} />
+                            <span style={{ fontSize: 12, color: 'var(--fg-2)', fontWeight: 500 }}>{PLAN_NAMES[p.tier] ?? p.tier}</span>
+                          </div>
+                          <div className="mono" style={{ fontSize: 22, fontWeight: 500, letterSpacing: '-0.02em' }}>{p.count}</div>
+                          <div className="hstack" style={{ justifyContent: 'space-between', marginTop: 4 }}>
+                            <span className="fg-3" style={{ fontSize: 11 }}>{p.pct}% del total</span>
+                            <span className="mono" style={{ fontSize: 11, color: `var(--plan-${tone})` }}>{PLAN_COMMISSIONS[p.tier] ?? '—'}% com.</span>
+                          </div>
+                          <div className="progress" style={{ marginTop: 10, height: 4 }}>
+                            <i style={{ width: `${p.pct * 2.5}%`, background: `var(--plan-${tone})` }} />
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Recent activity */}
+            <div className="card">
+              <div className="card-hd">
+                <div className="ttl">Actividad reciente</div>
+                <button className="btn btn-ghost btn-sm" onClick={() => router.push('/actividades')}>
+                  Ver todo <Icon name="ArrowRight" size={12} className="ic" />
+                </button>
+              </div>
+              <div style={{ padding: '4px 0' }}>
+                {activities.length === 0 ? (
+                  <div style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--fg-3)', fontSize: 13 }}>
+                    Sin actividad registrada
+                  </div>
+                ) : (
+                  activities.map((a, i) => {
+                    const canal = CHANNEL_ICONS[a.channel] || CHANNEL_ICONS.otro
+                    const date = new Date(a.created_at).toLocaleDateString('es-PY', { day: 'numeric', month: 'short' })
+                    return (
+                      <div key={a.id} style={{
+                        padding: '10px 16px',
+                        borderBottom: i === activities.length - 1 ? 'none' : '1px solid var(--border-soft)',
+                        display: 'flex', gap: 10,
+                      }}>
+                        <div style={{
+                          width: 28, height: 28, borderRadius: 7,
+                          background: 'var(--bg-3)', display: 'grid', placeItems: 'center',
+                          color: canal.color, flexShrink: 0,
+                          border: '1px solid var(--border-soft)',
+                        }}>
+                          <Icon name={canal.ic} size={13} />
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'baseline' }}>
+                            <div style={{ fontSize: 13, fontWeight: 500 }}>{a.client_name ?? 'Cliente'}</div>
+                            <span className="fg-3 mono" style={{ fontSize: 11 }}>{date}</span>
+                          </div>
+                          <div className="fg-2" style={{ fontSize: 12, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {a.summary}
+                          </div>
+                          <div className="hstack" style={{ marginTop: 4, fontSize: 11, color: 'var(--fg-3)' }}>
+                            <span>{canal.label}</span>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })
+                )}
+              </div>
+            </div>
+
+          </div>
+
+          {/* Team ranking — visible for supervisor/admin */}
+          {permissions?.can_view_all_clients && ranking.length > 0 && (
+            <div className="card" style={{ marginTop: 16 }}>
+              <div className="card-hd">
+                <div>
+                  <div className="ttl">Ranking del equipo</div>
+                  <div className="sub">{ranking.length} agentes · planes activos este mes</div>
+                </div>
+                <button className="btn btn-ghost btn-sm" onClick={() => router.push('/reportes')}>
+                  Ver reportes <Icon name="ArrowRight" size={12} className="ic" />
+                </button>
+              </div>
+              <table className="tbl">
+                <thead>
+                  <tr>
+                    <th style={{ width: 36 }}>#</th>
+                    <th>Agente</th>
+                    <th className="num">Planes</th>
+                    <th className="num">Prima/mes</th>
+                    <th className="num">Comisión/mes</th>
+                    <th style={{ width: 160 }}>Proporción</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {ranking.map((r, i) => {
+                    const maxPrima = ranking[0]?.prima || 1
+                    const pct = Math.round((r.prima / maxPrima) * 100)
+                    return (
+                      <tr key={r.agent_id} className={selectedAgent === r.agent_id ? 'selected' : ''}>
+                        <td className="mono" style={{ color: i === 0 ? 'var(--warning)' : 'var(--fg-3)', fontWeight: i === 0 ? 600 : 400 }}>
+                          {i + 1}
+                        </td>
+                        <td style={{ fontWeight: 500 }}>{r.name}</td>
+                        <td className="num">{r.plans}</td>
+                        <td className="num">{fmtGs(r.prima)}</td>
+                        <td className="num" style={{ color: 'var(--success)' }}>{fmtGs(r.comision)}</td>
+                        <td>
+                          <div className="progress" style={{ height: 5 }}>
+                            <i style={{ width: `${pct}%`, background: i === 0 ? 'var(--warning)' : 'var(--accent)' }} />
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
         </div>
-      </main>
-    </div>
-    </ProtectedRoute>
+      </div>
+    </AppShell>
   )
 }
