@@ -1,7 +1,7 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextRequest, NextResponse } from 'next/server'
 
-const PUBLIC_PATHS = ['/login', '/auth/callback']
+const PUBLIC_PATHS = ['/login', '/auth/callback', '/auth/reset-password']
 
 // API routes that are intentionally public (e.g. webhook receivers)
 const PUBLIC_API_PATHS: string[] = []
