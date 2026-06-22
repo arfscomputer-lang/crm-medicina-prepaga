@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
+import { useSearchParams } from 'next/navigation'
 import AppShell from '@/components/AppShell'
 import Topbar from '@/components/Topbar'
 import Icon from '@/components/ui/Icon'
@@ -104,7 +105,10 @@ function toggleArr<T>(arr: T[], val: T): T[] {
 
 export default function CampanasPage() {
   const { user, permissions } = useAuth()
-  const [tab, setTab] = useState<'campanas' | 'tienda'>('campanas')
+  const searchParams = useSearchParams()
+  const [tab, setTab] = useState<'campanas' | 'tienda'>(
+    searchParams.get('tab') === 'tienda' ? 'tienda' : 'campanas'
+  )
   const [campaigns, setCampaigns] = useState<Campaign[]>([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
