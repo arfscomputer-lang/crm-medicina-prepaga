@@ -32,6 +32,7 @@ const menuItems = [
   { href: '/actividades', label: 'Actividades', icon: Activity },
   { href: '/whatsapp', label: 'WhatsApp', icon: MessageCircle },
   { href: '/messenger', label: 'Messenger', icon: Facebook },
+  { href: '/campanas', label: 'Campañas', icon: Send },
   { href: '/configuracion', label: 'Configuración', icon: Settings },
 ]
 
@@ -133,32 +134,16 @@ export default function Sidebar() {
               </li>
             )}
             {(permissions?.can_create_campaigns || permissions?.can_send_campaigns) && (
-              <>
-                <li>
-                  <Link
-                    href="/campanas"
-                    onClick={closeSidebar}
-                    className={`flex items-center gap-3 px-4 py-3 rounded-lg transition-all ${
-                      pathname === '/campanas' && !pathname.includes('tienda')
-                        ? 'bg-accent text-white'
-                        : 'text-gray-300 hover:bg-border hover:text-white'
-                    }`}
-                  >
-                    <Send size={20} />
-                    <span className="font-medium">Campañas</span>
-                  </Link>
-                </li>
-                <li>
-                  <Link
-                    href="/campanas?tab=tienda"
-                    onClick={closeSidebar}
-                    className="flex items-center gap-3 px-4 py-3 rounded-lg transition-all text-gray-300 hover:bg-border hover:text-white"
-                  >
-                    <ShoppingBag size={20} />
-                    <span className="font-medium">Promo Tienda</span>
-                  </Link>
-                </li>
-              </>
+              <li>
+                <Link
+                  href="/campanas?tab=tienda"
+                  onClick={closeSidebar}
+                  className="flex items-center gap-3 px-4 py-3 rounded-lg transition-all text-gray-300 hover:bg-border hover:text-white"
+                >
+                  <ShoppingBag size={20} />
+                  <span className="font-medium">Promo Tienda</span>
+                </Link>
+              </li>
             )}
             {permissions?.can_view_audit_log && (
               <li>
