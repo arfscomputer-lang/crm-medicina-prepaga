@@ -17,6 +17,7 @@ const NAV_MAIN = [
 const NAV_CHANNELS = [
   { id: '/whatsapp',  label: 'WhatsApp',  icon: 'MessageCircle' },
   { id: '/messenger', label: 'Messenger', icon: 'MessageSquare' },
+  { id: '/campanas',  label: 'Campañas',  icon: 'Send' },
 ]
 
 const NAV_SYSTEM = [
